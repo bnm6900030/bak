@@ -1,0 +1,141 @@
+# general settings
+name: train_MYIR_scratch
+model_type: MYModel
+num_gpu: 1
+scale: 1
+manual_seed: 100
+is_train: True
+dist: False
+# dataset and data loader settings
+datasets:
+  train:
+    name: TrainSet
+    type: Dataset_DefocusDeblur_DualPixel_16bit
+#    dataroot_gt: D:\code\BasicSR\datasets\DPDD\val
+#    dataroot_lqL: D:\code\BasicSR\datasets\DPDD\train\L
+#    dataroot_lqR: D:\code\BasicSR\datasets\DPDD\train\R
+#    dataroot_lqC: D:\code\BasicSR\datasets\DPDD\train\C
+    dataroot_gt: /home/lab/code1/MYIR/datasets/DPDD/val
+    dataroot_lqL: /home/lab/code1/MYIR/datasets/DPDD/train/L
+    dataroot_lqR: /home/lab/code1/MYIR/datasets/DPDD/train/R
+    dataroot_lqC: /home/lab/code1/MYIR/datasets/DPDD/train/C
+    filename_tmpl: '{}'
+    io_backend:
+      type: disk
+    geometric_augs: true
+
+
+    # data loader
+    use_shuffle: true
+    num_worker_per_gpu: 1
+    batch_size_per_gpu: 1
+    dataset_enlarge_ratio: 1
+    prefetch_mode: ~
+    ### -------------Progressive training--------------------------
+    mini_batch_sizes: [ 1,1,1,1,1,1 ]             # Batch size per gpu
+    iters: [ 92000,64000,48000,36000,36000,24000 ]
+    gt_size: 384   # Max patch size for progressive training
+    gt_sizes: [ 128,128,128,128,128,128 ]  # Patch sizes for progressive training.
+    ### ------------------------------------------------------------
+
+  val:
+    name: ValSet
+    type: Dataset_DefocusDeblur_DualPixel_16bit
+    dataroot_gt: /home/lab/code1/MYIR/datasets/DPDD/val
+    dataroot_lqL: /home/lab/code1/MYIR/datasets/DPDD/train/L
+    dataroot_lqR: /home/lab/code1/MYIR/datasets/DPDD/train/R
+    dataroot_lqC: /home/lab/code1/MYIR/datasets/DPDD/train/C
+#    dataroot_gt: D:\code\BasicSR\datasets\DPDD\val
+#    dataroot_lqL: D:\code\BasicSR\datasets\DPDD\train\L
+#    dataroot_lqR: D:\code\BasicSR\datasets\DPDD\train\R
+#    dataroot_lqC: D:\code\BasicSR\datasets\DPDD\train\C
+    io_backend:
+      type: disk
+
+# network structures
+network_g:
+  type: MYIR2
+  upscale: 1
+  in_chans: 6
+  img_size: 128
+  img_range: 1.
+  depths: [ 6, 6, 6, 6,  ]
+  embed_dim: 48
+  num_heads: [ 6, 6, 6, 6,  ]
+  mlp_ratio: 2
+  #  upsampler: 'pixelshuffle'
+  resi_connection: '1conv'
+  in_channels: 6
+  upsampler: ""
+  window_size: 16
+  stripe_size:
+    - 16
+    - 32
+  stripe_groups:
+    - null
+    - null
+  anchor_window_down_factor: 4
+
+
+# path
+path:
+  pretrain_network_g: ~
+  strict_load_g: true
+  resume_state: ~
+
+# training settings
+train:
+  total_iter: 500000
+  warmup_iter: -1  # no warm up
+  use_grad_clip: true
+  ema_decay: 0.999
+  optim_g:
+    type: AdamW
+    lr: !!float 3e-4
+    weight_decay: 0
+    betas: [ 0.9, 0.99 ]
+
+  scheduler:
+    type: CosineAnnealingRestartCyclicLR
+#    periods: [ 92000, 408000 ]
+    periods: [ 200, 408000 ]
+    restart_weights: [ 1,1 ]
+    eta_mins: [ 0.0003,0.000003 ]
+
+  mixing_augs:
+    mixup: false
+    mixup_beta: 1.2
+    use_identity: true
+
+
+
+  # losses
+  pixel_opt:
+    type: L1Loss
+    loss_weight: 1.0
+    reduction: mean
+
+# validation settings
+val:
+  val_freq: !!float 6e1
+  save_img: false
+
+  metrics:
+    psnr: # metric name, can be arbitrary
+      type: calculate_psnr
+      crop_border: 0
+      test_y_channel: false
+
+# logging settings
+logger:
+  print_freq: 60
+  save_checkpoint_freq: !!float 2e3
+  use_tb_logger: true
+  wandb:
+    project: ~
+    resume_id: ~
+
+# dist training settings
+dist_params:
+  backend: nccl
+  port: 29500

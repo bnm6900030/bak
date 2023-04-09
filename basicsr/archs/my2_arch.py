@@ -19,7 +19,11 @@ class Downsample(nn.Module):
     def __init__(self, n_feat):
         super(Downsample, self).__init__()
 
-        self.body = nn.Sequential(nn.Conv2d(n_feat, n_feat // 2, kernel_size=3, stride=1, padding=1, bias=False),
+        self.body = nn.Sequential(
+
+            # nn.Conv2d(n_feat, n_feat // 2, kernel_size=1, stride=1, padding=0, bias=False),
+            nn.Conv2d(n_feat, n_feat // 2, kernel_size=3, stride=1, padding=2, bias=False,dilation=2),
+            # nn.Conv2d(n_feat, n_feat // 2, kernel_size=3, stride=1, padding=1, bias=False,),
                                   nn.PixelUnshuffle(2))
 
     def forward(self, x, x_size):
@@ -30,7 +34,10 @@ class Upsample(nn.Module):
     def __init__(self, n_feat):
         super(Upsample, self).__init__()
 
-        self.body = nn.Sequential(nn.Conv2d(n_feat, n_feat * 2, kernel_size=3, stride=1, padding=1, bias=False),
+        self.body = nn.Sequential(
+            # nn.Conv2d(n_feat, n_feat * 2, kernel_size=1, stride=1, padding=0, bias=False),
+            nn.Conv2d(n_feat, n_feat * 2, kernel_size=3, stride=1, padding=2, bias=False,dilation=2),
+            # nn.Conv2d(n_feat, n_feat * 2, kernel_size=3, stride=1, padding=1, bias=False,),
                                   nn.PixelShuffle(2))
 
     def forward(self, x, x_size):
@@ -623,6 +630,15 @@ class MYIR2(nn.Module):
             for layer in self.layers:
                 layer._init_weights()
 
+        hidden_features = int(3 * 2.66)
+        self.project_in = nn.Conv2d(3, hidden_features * 2, kernel_size=1, bias=False)
+        self.dwconv = nn.Conv2d(hidden_features * 2, hidden_features * 2, kernel_size=3, stride=1, padding=1,
+                                groups=hidden_features * 2, bias=True,)
+
+        self.project_out = nn.Conv2d(hidden_features, 3, kernel_size=1, bias=False)
+        self.temperature = nn.Parameter(torch.ones(3, 1, 1))
+
+
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
             # Only used to initialize linear layers
@@ -691,18 +707,25 @@ class MYIR2(nn.Module):
 
     def forward(self, x):
         H, W = x.shape[2:]
-        single = x[:, -3:, :, :]
+        # single = x[:, -3:, :, :]
+        # coc = single - x[:, :3, :, :]
+        # coc = self.project_in(coc)
+        # coc1, coc2 = self.dwconv(coc).chunk(2, dim=1)
+        # coc = F.gelu(coc1) * coc2
+        # coc = self.project_out(coc)
         # x = single
-        self.mean = self.mean.type_as(x)
-        x = (x - self.mean) * self.img_range
+        # self.mean = self.mean.type_as(x)
+        # x = (x - self.mean) * self.img_range
 
         # for image denoising and JPEG compression artifact reduction
         x_first = self.conv_first(x)
         res = self.conv_after_body(self.forward_features(x_first)) + x_first
         x = self.conv_last(res)
 
-        x = x / self.img_range + self.mean
-        x = x + single
+        # x = x / self.img_range + self.mean
+        # x = x*0.001 + single + coc* self.temperature*0.001
+        # x = x*0.001 + single
+        # x = coc* self.temperature + single
         return x[:, :, : H * self.upscale, : W * self.upscale]
 
     def flops(self):
@@ -727,6 +750,6 @@ class MYIR2(nn.Module):
 if __name__ == '__main__':
     model = MYIR2()
     model.cuda()
-    from torchstat import stat
+    from torchsummary import summary
 
-    stat(model, (6, 128, 128))
+    summary(model, (6, 128, 128))

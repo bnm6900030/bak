@@ -397,24 +397,33 @@ class MixedAttention(nn.Module):
             dim, anchor_proj_type, anchor_one_stage, anchor_window_down_factor, args
         )
 
-        # self.window_attn = WindowAttention(
-        #     input_resolution,
-        #     window_size,
-        #     num_heads_w,
-        #     window_shift,
-        #     attn_drop,
-        #     pretrained_window_size,
-        #     args,
-        # )
-        self.NA_attn = NAttention(
-            dim,
-            kernel_size=7,
-            dilation=2,
-            num_heads=num_heads_s,
-            qkv_bias=qkv_bias,
-            qk_scale=None,
-            attn_drop=attn_drop,
+        self.window_attn = WindowAttention(
+            input_resolution,
+            window_size,
+            num_heads_w,
+            window_shift,
+            attn_drop,
+            pretrained_window_size,
+            args,
         )
+        # self.NA_attn = NAttention(
+        #     dim,
+        #     kernel_size=7,
+        #     dilation=2,
+        #     num_heads=num_heads_s,
+        #     qkv_bias=qkv_bias,
+        #     qk_scale=None,
+        #     attn_drop=attn_drop,
+        # )
+        # self.NA_attn2 = NAttention(
+        #     dim,
+        #     kernel_size=7,
+        #     dilation=2,
+        #     num_heads=num_heads_s,
+        #     qkv_bias=qkv_bias,
+        #     qk_scale=None,
+        #     attn_drop=attn_drop,
+        # )
         self.stripe_attn = AnchorStripeAttention(
             input_resolution,
             stripe_size,
@@ -445,10 +454,9 @@ class MixedAttention(nn.Module):
         anchor = self.anchor(x, x_size)
 
         # attention
-        # x_window = self.window_attn(
-        #     qkv_window, x_size, *self._get_table_index_mask(table_index_mask, True)
-        # )
-        x_window = self.NA_attn(qkv_window, x_size)
+        x_window = self.window_attn(
+            qkv_window, x_size, *self._get_table_index_mask(table_index_mask, True)
+        )
         x_stripe = self.stripe_attn(
             qkv_stripe,
             anchor,
@@ -597,16 +605,16 @@ class EfficientMixAttnTransformerBlock(nn.Module):
             pretrained_stripe_size,
             args,
         )
-        # self.attn = NeighborhoodAttention(
-        #     dim,
-        #     kernel_size=7,
-        #     dilation=2,
-        #     num_heads=4,
-        #     qkv_bias=qkv_bias,
-        #     qk_scale=None,
-        #     attn_drop=attn_drop,
-        #     proj_drop=drop,
-        # )
+        self.attn = NeighborhoodAttention(
+            dim,
+            kernel_size=7,
+            dilation=2,
+            num_heads=4,
+            qkv_bias=qkv_bias,
+            qk_scale=None,
+            attn_drop=attn_drop,
+            proj_drop=drop,
+        )
         self.norm1 = norm_layer(dim)
         if self.args.local_connection:
             self.conv = CAB(dim)

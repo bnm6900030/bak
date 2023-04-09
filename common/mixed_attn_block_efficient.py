@@ -1,10 +1,12 @@
 import math
 from abc import ABC
 from math import prod
-
+from natten import NeighborhoodAttention2D as NeighborhoodAttention
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from natten.functional import natten2dav, natten2dqkrpb
+from torch.nn.functional import pad
 from common.mixed_attn_block import (
     AnchorProjection,
     CAB,
@@ -13,11 +15,11 @@ from common.mixed_attn_block import (
 )
 from common.ops import (
     window_partition,
-    window_reverse, bchw_to_blc, blc_to_bchw,
+    window_reverse, bchw_to_blc, blc_to_bchw, blc_to_bhwc,
 )
 
-from common.swin_v1_block import Mlp
 from timm.models.layers import DropPath
+from torch.nn.init import trunc_normal_
 
 
 class AffineTransform(nn.Module):
@@ -103,14 +105,14 @@ class WindowAttention(Attention):
     """
 
     def __init__(
-        self,
-        input_resolution,
-        window_size,
-        num_heads,
-        window_shift=False,
-        attn_drop=0.0,
-        pretrained_window_size=[0, 0],
-        args=None,
+            self,
+            input_resolution,
+            window_size,
+            num_heads,
+            window_shift=False,
+            attn_drop=0.0,
+            pretrained_window_size=[0, 0],
+            args=None,
     ):
 
         super(WindowAttention, self).__init__()
@@ -147,7 +149,7 @@ class WindowAttention(Attention):
         qkv = qkv.view(-1, prod(self.window_size), C)  # nW*B, wh*ww, C
 
         B_, N, _ = qkv.shape
-        qkv = qkv.reshape(B_, N, 3, self.num_heads, -1).permute(2, 0, 3, 1, 4)
+        qkv = qkv.reshape(B_, N, 3, self.num_heads, -1).permute(2, 0, 3, 1, 4) #3, B,HEAD-1
         q, k, v = qkv[0], qkv[1], qkv[2]  # nW*B, H, wh*ww, dim
 
         # attention
@@ -173,6 +175,76 @@ class WindowAttention(Attention):
     def flops(self, N):
         pass
 
+class NAttention(nn.Module):
+    def __init__(
+            self,
+            dim,
+            num_heads,
+            kernel_size,
+            dilation=1,
+            bias=True,
+            qkv_bias=True,
+            qk_scale=None,
+            attn_drop=0.0,
+    ):
+
+        super(NAttention, self).__init__()
+        self.num_heads = num_heads
+        self.head_dim = dim // self.num_heads
+        self.scale = qk_scale or self.head_dim ** -0.5
+        assert (
+                kernel_size > 1 and kernel_size % 2 == 1
+        ), f"Kernel size must be an odd number greater than 1, got {kernel_size}."
+        self.kernel_size = kernel_size
+        assert (
+                dilation is None or dilation >= 1
+        ), f"Dilation must be greater than or equal to 1, got {dilation}."
+
+        self.dilation = dilation or 1
+        self.window_size = self.kernel_size * self.dilation
+
+        self.qkv = nn.Linear(int(dim * 1.5), int(dim *3), bias=qkv_bias)
+        self.after_qkv = nn.Linear(int(dim), int(dim / 2), bias=qkv_bias)
+        if bias:
+            self.rpb = nn.Parameter(
+                torch.zeros(num_heads, (2 * kernel_size - 1), (2 * kernel_size - 1))
+            )
+            trunc_normal_(self.rpb, std=0.02, mean=0.0, a=-2.0, b=2.0)
+        else:
+            self.register_parameter("rpb", None)
+        self.attn_drop = nn.Dropout(attn_drop)
+
+    def forward(self, x, x_size):
+        Hp, Wp = x_size
+        H, W = int(Hp), int(Wp)
+        B, L, C = x.shape
+        x = x.view(B, Hp, Wp, C)
+        pad_l = pad_t = pad_r = pad_b = 0
+        if H < self.window_size or W < self.window_size:
+            pad_l = pad_t = 0
+            pad_r = max(0, self.window_size - W)
+            pad_b = max(0, self.window_size - H)
+            x = pad(x, (0, 0, pad_l, pad_r, pad_t, pad_b))
+            _, H, W, _ = x.shape
+        qkv = (
+            self.qkv(x)
+            .reshape(B, H, W, 3, self.num_heads, self.head_dim)
+            .permute(3, 0, 4, 1, 2, 5)
+        )
+        q, k, v = qkv[0], qkv[1], qkv[2]
+        q = q * self.scale
+        attn = natten2dqkrpb(q, k, self.rpb, self.kernel_size, self.dilation)
+        attn = attn.softmax(dim=-1)
+        attn = self.attn_drop(attn)
+        x = natten2dav(attn, v, self.kernel_size, self.dilation)
+        x = x.permute(0, 2, 3, 1, 4).reshape(B, H, W, int(C / 1.5))
+        x = self.after_qkv(x)
+        if pad_r or pad_b:
+            x = x[:, :Hp, :Wp, :]
+
+        return x.view(B, L, C // 3)
+
+
 
 class AnchorStripeAttention(Attention):
     r"""Stripe attention
@@ -184,16 +256,16 @@ class AnchorStripeAttention(Attention):
     """
 
     def __init__(
-        self,
-        input_resolution,
-        stripe_size,
-        stripe_groups,
-        stripe_shift,
-        num_heads,
-        attn_drop=0.0,
-        pretrained_stripe_size=[0, 0],
-        anchor_window_down_factor=1,
-        args=None,
+            self,
+            input_resolution,
+            stripe_size,
+            stripe_groups,
+            stripe_shift,
+            num_heads,
+            attn_drop=0.0,
+            pretrained_stripe_size=[0, 0],
+            anchor_window_down_factor=1,
+            args=None,
     ):
 
         super(AnchorStripeAttention, self).__init__()
@@ -213,7 +285,7 @@ class AnchorStripeAttention(Attention):
         self.softmax = nn.Softmax(dim=-1)
 
     def forward(
-        self, qkv, anchor, x_size, table, index_a2w, index_w2a, mask_a2w, mask_w2a
+            self, qkv, anchor, x_size, table, index_a2w, index_w2a, mask_a2w, mask_w2a
     ):
         """
         Args:
@@ -292,26 +364,26 @@ class MixedAttention(nn.Module):
     """
 
     def __init__(
-        self,
-        dim,
-        input_resolution,
-        num_heads_w,
-        num_heads_s,
-        window_size,
-        window_shift,
-        stripe_size,
-        stripe_groups,
-        stripe_shift,
-        qkv_bias=True,
-        qkv_proj_type="linear",
-        anchor_proj_type="separable_conv",
-        anchor_one_stage=True,
-        anchor_window_down_factor=1,
-        attn_drop=0.0,
-        proj_drop=0.0,
-        pretrained_window_size=[0, 0],
-        pretrained_stripe_size=[0, 0],
-        args=None,
+            self,
+            dim,
+            input_resolution,
+            num_heads_w,
+            num_heads_s,
+            window_size,
+            window_shift,
+            stripe_size,
+            stripe_groups,
+            stripe_shift,
+            qkv_bias=True,
+            qkv_proj_type="linear",
+            anchor_proj_type="separable_conv",
+            anchor_one_stage=True,
+            anchor_window_down_factor=1,
+            attn_drop=0.0,
+            proj_drop=0.0,
+            pretrained_window_size=[0, 0],
+            pretrained_stripe_size=[0, 0],
+            args=None,
     ):
 
         super(MixedAttention, self).__init__()
@@ -325,14 +397,23 @@ class MixedAttention(nn.Module):
             dim, anchor_proj_type, anchor_one_stage, anchor_window_down_factor, args
         )
 
-        self.window_attn = WindowAttention(
-            input_resolution,
-            window_size,
-            num_heads_w,
-            window_shift,
-            attn_drop,
-            pretrained_window_size,
-            args,
+        # self.window_attn = WindowAttention(
+        #     input_resolution,
+        #     window_size,
+        #     num_heads_w,
+        #     window_shift,
+        #     attn_drop,
+        #     pretrained_window_size,
+        #     args,
+        # )
+        self.NA_attn = NAttention(
+            dim,
+            kernel_size=7,
+            dilation=2,
+            num_heads=num_heads_s,
+            qkv_bias=qkv_bias,
+            qk_scale=None,
+            attn_drop=attn_drop,
         )
         self.stripe_attn = AnchorStripeAttention(
             input_resolution,
@@ -364,9 +445,10 @@ class MixedAttention(nn.Module):
         anchor = self.anchor(x, x_size)
 
         # attention
-        x_window = self.window_attn(
-            qkv_window, x_size, *self._get_table_index_mask(table_index_mask, True)
-        )
+        # x_window = self.window_attn(
+        #     qkv_window, x_size, *self._get_table_index_mask(table_index_mask, True)
+        # )
+        x_window = self.NA_attn(qkv_window, x_size)
         x_stripe = self.stripe_attn(
             qkv_stripe,
             anchor,
@@ -401,23 +483,8 @@ class MixedAttention(nn.Module):
 
     def flops(self, N):
         pass
-class GlobalPerceptron(nn.Module):
 
-    def __init__(self, input_channels, internal_neurons):
-        super(GlobalPerceptron, self).__init__()
-        self.fc1 = nn.Conv2d(in_channels=input_channels, out_channels=internal_neurons, kernel_size=1, stride=1, bias=True)
-        self.fc2 = nn.Conv2d(in_channels=internal_neurons, out_channels=input_channels, kernel_size=1, stride=1, bias=True)
-        self.input_channels = input_channels
 
-    def forward(self, x, x_size):
-        x = blc_to_bchw(x, x_size).contiguous()
-        x = F.adaptive_avg_pool2d(x, output_size=(1, 1))
-        x = self.fc1(x)
-        x = F.relu(x, inplace=True)
-        x = self.fc2(x)
-        x = torch.sigmoid(x)
-        x = x.view(-1, self.input_channels, 1, 1)
-        return x
 class FeedForward(nn.Module):
     def __init__(self, dim, ffn_expansion_factor, bias):
         super(FeedForward, self).__init__()
@@ -425,9 +492,11 @@ class FeedForward(nn.Module):
         hidden_features = int(dim * ffn_expansion_factor)
 
         self.project_in = nn.Conv2d(dim, hidden_features * 2, kernel_size=1, bias=bias)
-        self.dwconv = nn.Conv2d(hidden_features*2, hidden_features*2, kernel_size=3, stride=1, padding=1, groups=hidden_features*2, bias=bias)
+        self.dwconv = nn.Conv2d(hidden_features * 2, hidden_features * 2, kernel_size=3, stride=1, padding=1,
+                                groups=hidden_features * 2, bias=True,)
 
         self.project_out = nn.Conv2d(hidden_features, dim, kernel_size=1, bias=bias)
+
     def forward(self, x, x_size):
         x = blc_to_bchw(x, x_size).contiguous()
         x = self.project_in(x)
@@ -436,6 +505,7 @@ class FeedForward(nn.Module):
         x = self.project_out(x)
 
         return bchw_to_blc(x)
+
 
 class EfficientMixAttnTransformerBlock(nn.Module):
     r"""Mix attention transformer block with shared QKV projection and output projection for mixed attention modules.
@@ -460,32 +530,32 @@ class EfficientMixAttnTransformerBlock(nn.Module):
     """
 
     def __init__(
-        self,
-        dim,
-        input_resolution,
-        num_heads_w,
-        num_heads_s,
-        window_size=7,
-        window_shift=False,
-        stripe_size=[8, 8],
-        stripe_groups=[None, None],
-        stripe_shift=False,
-        stripe_type="H",
-        mlp_ratio=4.0,
-        qkv_bias=True,
-        qkv_proj_type="linear",
-        anchor_proj_type="separable_conv",
-        anchor_one_stage=True,
-        anchor_window_down_factor=1,
-        drop=0.0,
-        attn_drop=0.0,
-        drop_path=0.0,
-        act_layer=nn.GELU,
-        norm_layer=nn.LayerNorm,
-        pretrained_window_size=[0, 0],
-        pretrained_stripe_size=[0, 0],
-        res_scale=1.0,
-        args=None,
+            self,
+            dim,
+            input_resolution,
+            num_heads_w,
+            num_heads_s,
+            window_size=7,
+            window_shift=False,
+            stripe_size=[8, 8],
+            stripe_groups=[None, None],
+            stripe_shift=False,
+            stripe_type="H",
+            mlp_ratio=4.0,
+            qkv_bias=True,
+            qkv_proj_type="linear",
+            anchor_proj_type="separable_conv",
+            anchor_one_stage=True,
+            anchor_window_down_factor=1,
+            drop=0.0,
+            attn_drop=0.0,
+            drop_path=0.0,
+            act_layer=nn.GELU,
+            norm_layer=nn.LayerNorm,
+            pretrained_window_size=[0, 0],
+            pretrained_stripe_size=[0, 0],
+            res_scale=1.0,
+            args=None,
     ):
         super().__init__()
         self.dim = dim
@@ -506,7 +576,7 @@ class EfficientMixAttnTransformerBlock(nn.Module):
         self.mlp_ratio = mlp_ratio
         self.res_scale = res_scale
 
-        self.attn = MixedAttention(
+        self.attn1 = MixedAttention(
             dim,
             input_resolution,
             num_heads_w,
@@ -527,22 +597,25 @@ class EfficientMixAttnTransformerBlock(nn.Module):
             pretrained_stripe_size,
             args,
         )
+        # self.attn = NeighborhoodAttention(
+        #     dim,
+        #     kernel_size=7,
+        #     dilation=2,
+        #     num_heads=4,
+        #     qkv_bias=qkv_bias,
+        #     qk_scale=None,
+        #     attn_drop=attn_drop,
+        #     proj_drop=drop,
+        # )
         self.norm1 = norm_layer(dim)
         if self.args.local_connection:
             self.conv = CAB(dim)
 
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
 
-        # self.mlp = Mlp(
-        #     in_features=dim,
-        #     hidden_features=int(dim * mlp_ratio),
-        #     act_layer=act_layer,
-        #     drop=drop,
-        # )
         self.ffn = FeedForward(dim, 2.66, False)
 
         self.norm2 = norm_layer(dim)
-        self.gp = GlobalPerceptron(input_channels=dim, internal_neurons=dim // 4)
 
     def _get_table_index_mask(self, all_table_index_mask):
         table_index_mask = {
@@ -574,22 +647,26 @@ class EfficientMixAttnTransformerBlock(nn.Module):
         return table_index_mask
 
     def forward(self, x, x_size, all_table_index_mask):
-        global_vec = self.gp(x, x_size)
         # Mixed attention
+
         table_index_mask = self._get_table_index_mask(all_table_index_mask)
-        if self.args.local_connection:
-            x = (
-                x
-                + self.res_scale * self.drop_path(self.attn(self.norm1(x), x_size, table_index_mask))
-                # + self.conv(x, x_size)
-            )
-        else:
-            x = x + self.res_scale * self.drop_path(
-                self.norm1(self.attn(x, x_size, table_index_mask))
-            )
+        # if self.args.local_connection:
+        #     x = self.norm1(x)
+        #     x=blc_to_bhwc(x,x_size)
+        #     x = (
+        #         x
+        #         # + self.res_scale * self.drop_path(self.attn(self.norm1(x), x_size, table_index_mask))
+        #         + self.res_scale * self.drop_path(self.attn(x))
+        #         # + self.conv(x, x_size)
+        #     )
+        #     x=x.permute(0, 3, 1, 2).flatten(2).transpose(1, 2)
+        # else:
+        x = x + self.res_scale * self.drop_path(
+            (self.attn1(self.norm1(x), x_size, table_index_mask))
+        )
         # FFN
         x = x + self.res_scale * self.drop_path(self.ffn(self.norm2(x), x_size))
-        x = blc_to_bchw(x, x_size).contiguous() * global_vec
+        x = blc_to_bchw(x, x_size).contiguous()
         return bchw_to_blc(x)
 
     def extra_repr(self) -> str:

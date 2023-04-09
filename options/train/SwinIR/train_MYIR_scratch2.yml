@@ -15,10 +15,10 @@ datasets:
 #    dataroot_lqL: D:\code\BasicSR\datasets\DPDD\train\L
 #    dataroot_lqR: D:\code\BasicSR\datasets\DPDD\train\R
 #    dataroot_lqC: D:\code\BasicSR\datasets\DPDD\train\C
-    dataroot_gt: /home/lab/code1/MYIR/datasets/DPDD/val
-    dataroot_lqL: /home/lab/code1/MYIR/datasets/DPDD/train/L
-    dataroot_lqR: /home/lab/code1/MYIR/datasets/DPDD/train/R
-    dataroot_lqC: /home/lab/code1/MYIR/datasets/DPDD/train/C
+    dataroot_gt: /home/lab/code1/MYIR/datasets/DPDD1/val
+    dataroot_lqL: /home/lab/code1/MYIR/datasets/DPDD1/train/L
+    dataroot_lqR: /home/lab/code1/MYIR/datasets/DPDD1/train/R
+    dataroot_lqC: /home/lab/code1/MYIR/datasets/DPDD1/train/C
     filename_tmpl: '{}'
     io_backend:
       type: disk
@@ -41,10 +41,10 @@ datasets:
   val:
     name: ValSet
     type: Dataset_DefocusDeblur_DualPixel_16bit
-    dataroot_gt: /home/lab/code1/MYIR/datasets/DPDD/val
-    dataroot_lqL: /home/lab/code1/MYIR/datasets/DPDD/train/L
-    dataroot_lqR: /home/lab/code1/MYIR/datasets/DPDD/train/R
-    dataroot_lqC: /home/lab/code1/MYIR/datasets/DPDD/train/C
+    dataroot_gt: /home/lab/code1/MYIR/datasets/DPDD1/val
+    dataroot_lqL: /home/lab/code1/MYIR/datasets/DPDD1/train/L
+    dataroot_lqR: /home/lab/code1/MYIR/datasets/DPDD1/train/R
+    dataroot_lqC: /home/lab/code1/MYIR/datasets/DPDD1/train/C
 #    dataroot_gt: D:\code\BasicSR\datasets\DPDD\val
 #    dataroot_lqL: D:\code\BasicSR\datasets\DPDD\train\L
 #    dataroot_lqR: D:\code\BasicSR\datasets\DPDD\train\R
@@ -65,7 +65,6 @@ network_g:
   mlp_ratio: 2
   #  upsampler: 'pixelshuffle'
   resi_connection: '1conv'
-  in_channels: 6
   upsampler: ""
   window_size: 16
   stripe_size:
@@ -75,7 +74,7 @@ network_g:
     - null
     - null
   anchor_window_down_factor: 4
-
+  fairscale_checkpoint: false
 
 # path
 path:

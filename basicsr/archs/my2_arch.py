@@ -36,16 +36,18 @@ class Upsample(nn.Module):
     def forward(self, x, x_size):
         return bchw_to_blc(self.body(blc_to_bchw(x, x_size)))
 
+
 class ReduceChan(nn.Module):
     def __init__(self, embed_dim):
         super(ReduceChan, self).__init__()
-        self.body = nn.Conv2d(int(embed_dim), int(embed_dim/2), kernel_size=1, bias=False)
+        self.body = nn.Conv2d(int(embed_dim), int(embed_dim / 2), kernel_size=1, bias=False)
 
     def forward(self, x, x_size):
         B, L, C = x.shape
-        x = x.transpose(1, 2).contiguous().view(B, int(C*2), *x_size)
+        x = x.transpose(1, 2).contiguous().view(B, int(C * 2), *x_size)
         x = self.body(x)
         return x.flatten(2).transpose(1, 2)
+
 
 class TransformerStage(nn.Module):
     """Transformer stage.
@@ -278,26 +280,25 @@ class MYIR2(nn.Module):
 
     def __init__(
             self,
-            img_size=64,
-            in_channels=6,
-            out_channels=None,
-            embed_dim=64,
-            upscale=2,
+            img_size=128,
+            in_chans=6,
+            embed_dim=48,
+            upscale=1,
             img_range=1.0,
             upsampler="",
             depths=[6, 6, 6, 6],
             # num_heads_window=[3, 3, 3, 3],
             # num_heads_stripe=[3, 3, 3, 3],
-            window_size=8,
-            stripe_size=[8, 8],  # used for stripe window attention
+            window_size=16,
+            stripe_size=[16, 32],  # used for stripe window attention
             stripe_groups=[None, None],
             stripe_shift=False,
-            mlp_ratio=4.0,
+            mlp_ratio=2.0,
             qkv_bias=True,
             qkv_proj_type="linear",
             anchor_proj_type="avgpool",
             anchor_one_stage=True,
-            anchor_window_down_factor=1,
+            anchor_window_down_factor=4,
             out_proj_type="linear",
             local_connection=True,
             drop_rate=0.0,
@@ -315,34 +316,22 @@ class MYIR2(nn.Module):
     ):
         super(MYIR2, self).__init__()
         # Process the input arguments
-        out_channels = out_channels or in_channels
-        self.in_channels = in_channels
-        self.out_channels = out_channels
+        self.in_channels = in_chans
         self.embed_dim = embed_dim
         self.upscale = upscale
         self.upsampler = upsampler
         self.img_range = img_range
-        if in_channels == 3:
+        if in_chans == 3:
             rgb_mean = (0.4488, 0.4371, 0.4040)
             self.mean = torch.Tensor(rgb_mean).view(1, 3, 1, 1)
         else:
             self.mean = torch.zeros(1, 1, 1, 1)
 
-        max_stripe_size = max([0 if s is None else s for s in stripe_size])
-        max_stripe_groups = max([0 if s is None else s for s in stripe_groups])
-        max_stripe_groups *= anchor_window_down_factor
-
         self.input_resolution = to_2tuple(img_size)
         self.window_size = to_2tuple(window_size)
-        self.shift_size = [w // 2 for w in self.window_size]
-        self.stripe_size = stripe_size
-        self.stripe_groups = stripe_groups
-        self.pretrained_window_size = pretrained_window_size
-        self.pretrained_stripe_size = pretrained_stripe_size
-        self.anchor_window_down_factor = anchor_window_down_factor
 
         # Head of the network. First convolution.
-        self.conv_first = nn.Conv2d(in_channels, embed_dim, 3, 1, 1)
+        self.conv_first = nn.Conv2d(in_chans, embed_dim, 3, 1, 1)
 
         # Body of the network
         self.norm_start = norm_layer(embed_dim)
@@ -393,8 +382,8 @@ class MYIR2(nn.Module):
 
         self.down1_2 = Downsample(embed_dim)  ## From Level 1 to Level 2
         self.encoder_level2 = TransformerStage(
-            dim=embed_dim*2,
-            input_resolution=to_2tuple(int(img_size/2)),
+            dim=embed_dim * 2,
+            input_resolution=to_2tuple(int(img_size / 2)),
             depth=2,
             num_heads_window=3,
             num_heads_stripe=3,
@@ -425,8 +414,8 @@ class MYIR2(nn.Module):
 
         self.down2_3 = Downsample(int(embed_dim * 2 ** 1))  ## From Level 2 to Level 3
         self.encoder_level3 = TransformerStage(
-            dim=embed_dim*4,
-            input_resolution=to_2tuple(int(img_size/4)),
+            dim=embed_dim * 4,
+            input_resolution=to_2tuple(int(img_size / 4)),
             depth=6,
             num_heads_window=3,
             num_heads_stripe=3,
@@ -457,13 +446,13 @@ class MYIR2(nn.Module):
 
         self.down3_4 = Downsample(int(embed_dim * 2 ** 2))  ## From Level 3 to Level 4
         self.latent = TransformerStage(
-            dim=embed_dim*8,
-            input_resolution=to_2tuple(int(img_size/8)),
+            dim=embed_dim * 8,
+            input_resolution=to_2tuple(int(img_size / 8)),
             depth=6,
             num_heads_window=3,
             num_heads_stripe=3,
-            window_size=to_2tuple(int(window_size/2)),
-            stripe_size=to_2tuple(int(window_size/2)),
+            window_size=to_2tuple(int(window_size / 2)),
+            stripe_size=to_2tuple(int(window_size / 2)),
             stripe_groups=stripe_groups,
             stripe_shift=stripe_shift,
             mlp_ratio=mlp_ratio,
@@ -491,8 +480,8 @@ class MYIR2(nn.Module):
         # self.reduce_chan_level3 = nn.Conv2d(int(embed_dim * 2 ** 3), int(embed_dim * 2 ** 2), kernel_size=1, bias=False)
         self.reduce_chan_level3 = ReduceChan(int(embed_dim * 2 ** 3))
         self.decoder_level3 = TransformerStage(
-            dim=embed_dim*4,
-            input_resolution=to_2tuple(int(img_size/4)),
+            dim=embed_dim * 4,
+            input_resolution=to_2tuple(int(img_size / 4)),
             depth=6,
             num_heads_window=3,
             num_heads_stripe=3,
@@ -525,8 +514,8 @@ class MYIR2(nn.Module):
         # self.reduce_chan_level2 = nn.Conv2d(int(embed_dim * 2 ** 2), int(embed_dim * 2 ** 1), kernel_size=1, bias=False)
         self.reduce_chan_level2 = ReduceChan(int(embed_dim * 2 ** 2))
         self.decoder_level2 = TransformerStage(
-            dim=embed_dim*2,
-            input_resolution=to_2tuple(int(img_size/2)),
+            dim=embed_dim * 2,
+            input_resolution=to_2tuple(int(img_size / 2)),
             depth=2,
             num_heads_window=3,
             num_heads_stripe=3,
@@ -627,7 +616,7 @@ class MYIR2(nn.Module):
 
         #####################################################################################################
         ################################ 3, high quality image reconstruction ################################
-        self.conv_last = nn.Conv2d(embed_dim, 3, 3, 1, 1)
+        self.conv_last = nn.Conv2d(embed_dim, 3, 3, 1, 1,1)
 
         self.apply(self._init_weights)
         if init_method in ["l", "w"] or init_method.find("t") >= 0:
@@ -669,32 +658,31 @@ class MYIR2(nn.Module):
         #     x = layer(x, x_size, table_index_mask)
         out_enc_level1 = self.encoder_level1(x, x_size)
 
-        inp_enc_level2 = self.down1_2(out_enc_level1, x_size )
-        out_enc_level2 = self.encoder_level2(inp_enc_level2, (int(x_size[0]/2),int(x_size[1]/2)),)
+        inp_enc_level2 = self.down1_2(out_enc_level1, x_size)
+        out_enc_level2 = self.encoder_level2(inp_enc_level2, (int(x_size[0] / 2), int(x_size[1] / 2)), )
 
-        inp_enc_level3 = self.down2_3(out_enc_level2, (int(x_size[0]/2),int(x_size[1]/2)))
-        out_enc_level3 = self.encoder_level3(inp_enc_level3, (int(x_size[0]/4),int(x_size[1]/4)), )
+        inp_enc_level3 = self.down2_3(out_enc_level2, (int(x_size[0] / 2), int(x_size[1] / 2)))
+        out_enc_level3 = self.encoder_level3(inp_enc_level3, (int(x_size[0] / 4), int(x_size[1] / 4)), )
 
-        inp_enc_level4 = self.down3_4(out_enc_level3, (int(x_size[0]/4),int(x_size[1]/4)))
-        latent = self.latent(inp_enc_level4, (int(x_size[0]/8),int(x_size[1]/8)),)
+        inp_enc_level4 = self.down3_4(out_enc_level3, (int(x_size[0] / 4), int(x_size[1] / 4)))
+        latent = self.latent(inp_enc_level4, (int(x_size[0] / 8), int(x_size[1] / 8)), )
 
-        inp_dec_level3 = self.up4_3(latent, (int(x_size[0]/8),int(x_size[1]/8)))
+        inp_dec_level3 = self.up4_3(latent, (int(x_size[0] / 8), int(x_size[1] / 8)))
         inp_dec_level3 = torch.cat([inp_dec_level3, out_enc_level3], 1)
-        inp_dec_level3 = self.reduce_chan_level3(inp_dec_level3, (int(x_size[0]/4),int(x_size[1]/4)))
-        out_dec_level3 = self.decoder_level3(inp_dec_level3, (int(x_size[0]/4),int(x_size[1]/4)),)
+        inp_dec_level3 = self.reduce_chan_level3(inp_dec_level3, (int(x_size[0] / 4), int(x_size[1] / 4)))
+        out_dec_level3 = self.decoder_level3(inp_dec_level3, (int(x_size[0] / 4), int(x_size[1] / 4)), )
 
-        inp_dec_level2 = self.up3_2(out_dec_level3, (int(x_size[0]/4),int(x_size[1]/4)))
+        inp_dec_level2 = self.up3_2(out_dec_level3, (int(x_size[0] / 4), int(x_size[1] / 4)))
         inp_dec_level2 = torch.cat([inp_dec_level2, out_enc_level2], 1)
-        inp_dec_level2 = self.reduce_chan_level2(inp_dec_level2,  (int(x_size[0]/2),int(x_size[1]/2)))
-        out_dec_level2 = self.decoder_level2(inp_dec_level2,  (int(x_size[0]/2),int(x_size[1]/2)),)
+        inp_dec_level2 = self.reduce_chan_level2(inp_dec_level2, (int(x_size[0] / 2), int(x_size[1] / 2)))
+        out_dec_level2 = self.decoder_level2(inp_dec_level2, (int(x_size[0] / 2), int(x_size[1] / 2)), )
 
-        inp_dec_level1 = self.up2_1(out_dec_level2,  (int(x_size[0]/2),int(x_size[1]/2)))
+        inp_dec_level1 = self.up2_1(out_dec_level2, (int(x_size[0] / 2), int(x_size[1] / 2)))
         inp_dec_level1 = torch.cat([inp_dec_level1, out_enc_level1], 1)
-        inp_dec_level1 = self.reduce_chan_level1(inp_dec_level1,  x_size)
-        out_dec_level1 = self.decoder_level1(inp_dec_level1, x_size,)
+        inp_dec_level1 = self.reduce_chan_level1(inp_dec_level1, x_size)
+        out_dec_level1 = self.decoder_level1(inp_dec_level1, x_size, )
 
         out_dec_level1 = self.refinement(out_dec_level1, x_size, )
-
 
         x = self.norm_end(out_dec_level1)  # B L C
         x = blc_to_bchw(x, x_size)
@@ -704,6 +692,7 @@ class MYIR2(nn.Module):
     def forward(self, x):
         H, W = x.shape[2:]
         single = x[:, -3:, :, :]
+        # x = single
         self.mean = self.mean.type_as(x)
         x = (x - self.mean) * self.img_range
 
@@ -713,8 +702,8 @@ class MYIR2(nn.Module):
         x = self.conv_last(res)
 
         x = x / self.img_range + self.mean
-
-        return x[:, :, : H * self.upscale, : W * self.upscale] + single
+        x = x + single
+        return x[:, :, : H * self.upscale, : W * self.upscale]
 
     def flops(self):
         pass
@@ -733,3 +722,11 @@ class MYIR2(nn.Module):
                 state_dict.pop(k)
                 print(k)
         return state_dict
+
+
+if __name__ == '__main__':
+    model = MYIR2()
+    model.cuda()
+    from torchstat import stat
+
+    stat(model, (6, 128, 128))

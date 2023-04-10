@@ -445,6 +445,7 @@ class MixedAttention(nn.Module):
             stripe_size: use stripe_size to determine whether the relative positional bias table and index
             need to be regenerated.
         """
+        x = bchw_to_blc(x)
         B, L, C = x.shape
 
         # qkv projection
@@ -468,7 +469,7 @@ class MixedAttention(nn.Module):
         # output projection
         x = self.proj(x)
         x = self.proj_drop(x)
-        return x
+        return blc_to_bchw(x,x_size)
 
     def _get_table_index_mask(self, table_index_mask, window_attn=True):
         if window_attn:
@@ -505,14 +506,12 @@ class FeedForward(nn.Module):
 
         self.project_out = nn.Conv2d(hidden_features, dim, kernel_size=1, bias=bias)
 
-    def forward(self, x, x_size):
-        x = blc_to_bchw(x, x_size).contiguous()
+    def forward(self, x):
         x = self.project_in(x)
         x1, x2 = self.dwconv(x).chunk(2, dim=1)
         x = F.gelu(x1) * x2
         x = self.project_out(x)
-
-        return bchw_to_blc(x)
+        return x
 
 
 class EfficientMixAttnTransformerBlock(nn.Module):
@@ -558,7 +557,6 @@ class EfficientMixAttnTransformerBlock(nn.Module):
             drop=0.0,
             attn_drop=0.0,
             drop_path=0.0,
-            act_layer=nn.GELU,
             norm_layer=nn.LayerNorm,
             pretrained_window_size=[0, 0],
             pretrained_stripe_size=[0, 0],
@@ -656,7 +654,6 @@ class EfficientMixAttnTransformerBlock(nn.Module):
 
     def forward(self, x, x_size, all_table_index_mask):
         # Mixed attention
-
         table_index_mask = self._get_table_index_mask(all_table_index_mask)
         # if self.args.local_connection:
         #     x = self.norm1(x)
@@ -673,9 +670,8 @@ class EfficientMixAttnTransformerBlock(nn.Module):
             (self.attn1(self.norm1(x), x_size, table_index_mask))
         )
         # FFN
-        x = x + self.res_scale * self.drop_path(self.ffn(self.norm2(x), x_size))
-        x = blc_to_bchw(x, x_size).contiguous()
-        return bchw_to_blc(x)
+        x = x + self.res_scale * self.drop_path(self.ffn(self.norm2(x)))
+        return x
 
     def extra_repr(self) -> str:
         return (

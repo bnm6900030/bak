@@ -1,6 +1,5 @@
 import numbers
 
-from omegaconf import OmegaConf
 import torch
 import torch.nn as nn
 from einops import rearrange
@@ -11,10 +10,9 @@ from basicsr.utils.registry import ARCH_REGISTRY
 
 from timm.models.layers import to_2tuple, trunc_normal_
 
-from common.mixed_attn_block_efficient import EfficientMixAttnTransformerBlock, _get_stripe_info
-from common.ops import bchw_to_blc, blc_to_bchw, get_relative_coords_table_all, get_relative_position_index_simple, \
-    calculate_mask, calculate_mask_all
+from common.mixed_attn_block_efficient import EfficientMixAttnTransformerBlock
 from common.swin_v1_block import build_last_conv
+from fairscale.nn import checkpoint_wrapper
 
 
 def to_3d(x):
@@ -136,34 +134,19 @@ class TransformerStage(nn.Module):
             dim,
             input_resolution,
             depth,
-            num_heads_window,
-            num_heads_stripe,
-            window_size,
-            stripe_size,
-            stripe_groups,
-            stripe_shift,
             mlp_ratio=4.0,
             qkv_bias=True,
-            qkv_proj_type="linear",
-            anchor_proj_type="avgpool",
-            anchor_one_stage=True,
-            anchor_window_down_factor=1,
             drop=0.0,
             attn_drop=0.0,
             drop_path=0.0,
             norm_layer=nn.LayerNorm,
-            pretrained_window_size=[0, 0],
-            pretrained_stripe_size=[0, 0],
             conv_type="1conv",
             init_method="",
-            fairscale_checkpoint=False,
-            offload_to_cpu=False,
-            args=None,
+
     ):
         super().__init__()
 
         self.dim = dim
-        self.input_resolution = input_resolution
         self.init_method = init_method
 
         self.blocks = nn.ModuleList()
@@ -171,46 +154,18 @@ class TransformerStage(nn.Module):
             block = EfficientMixAttnTransformerBlock(
                 dim=dim,
                 input_resolution=input_resolution,
-                num_heads_w=num_heads_window,
-                num_heads_s=num_heads_stripe,
-                window_size=window_size,
-                window_shift=i % 2 == 0,
-                stripe_size=stripe_size,
-                stripe_groups=stripe_groups,
-                stripe_type="H" if i % 2 == 0 else "W",
-                stripe_shift=i % 4 in [2, 3] if stripe_shift else False,
                 mlp_ratio=mlp_ratio,
                 qkv_bias=qkv_bias,
-                qkv_proj_type=qkv_proj_type,
-                anchor_proj_type=anchor_proj_type,
-                anchor_one_stage=anchor_one_stage,
-                anchor_window_down_factor=anchor_window_down_factor,
                 drop=drop,
                 attn_drop=attn_drop,
                 drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path,
                 norm_layer=norm_layer,
-                pretrained_window_size=pretrained_window_size,
-                pretrained_stripe_size=pretrained_stripe_size,
                 res_scale=0.1 if init_method == "r" else 1.0,
-                args=args,
             )
-            # print(fairscale_checkpoint, offload_to_cpu)
-            if fairscale_checkpoint:
-                block = checkpoint_wrapper(block, offload_to_cpu=offload_to_cpu)
+
             self.blocks.append(block)
 
         self.conv = build_last_conv(conv_type, dim)
-
-        self.input_resolution = input_resolution
-        self.window_size = window_size
-        self.shift_size = [w // 2 for w in self.window_size]
-        self.stripe_size = stripe_size
-        self.stripe_groups = stripe_groups
-        self.pretrained_window_size = pretrained_window_size
-        self.pretrained_stripe_size = pretrained_stripe_size
-        self.anchor_window_down_factor = anchor_window_down_factor
-        for k, v in self.set_table_index_mask(self.input_resolution).items():
-            self.register_buffer(k, v)
 
     def _init_weights(self):
         for n, m in self.named_modules():
@@ -238,10 +193,9 @@ class TransformerStage(nn.Module):
                 )
 
     def forward(self, x, x_size):
-        table_index_mask = self.get_table_index_mask(x.device, x_size)
         res = x
         for blk in self.blocks:
-            res = blk(res, x_size, table_index_mask)
+            res = blk(res)
         res = self.conv(res)
 
         return res + x
@@ -249,111 +203,27 @@ class TransformerStage(nn.Module):
     def flops(self):
         pass
 
-    def set_table_index_mask(self, x_size):
-        """
-        Two used cases:
-        1) At initialization: set the shared buffers.
-        2) During forward pass: get the new buffers if the resolution of the input changes
-        """
-        # ss - stripe_size, sss - stripe_shift_size
-        ss, sss = _get_stripe_info(self.stripe_size, self.stripe_groups, True, x_size)
-        df = self.anchor_window_down_factor
-
-        table_w = get_relative_coords_table_all(
-            self.window_size, self.pretrained_window_size
-        )
-        table_sh = get_relative_coords_table_all(ss, self.pretrained_stripe_size, df)
-        table_sv = get_relative_coords_table_all(
-            ss[::-1], self.pretrained_stripe_size, df
-        )
-
-        index_w = get_relative_position_index_simple(self.window_size)
-        index_sh_a2w = get_relative_position_index_simple(ss, df, False)
-        index_sh_w2a = get_relative_position_index_simple(ss, df, True)
-        index_sv_a2w = get_relative_position_index_simple(ss[::-1], df, False)
-        index_sv_w2a = get_relative_position_index_simple(ss[::-1], df, True)
-
-        mask_w = calculate_mask(x_size, self.window_size, self.shift_size)
-        mask_sh_a2w = calculate_mask_all(x_size, ss, sss, df, False)
-        mask_sh_w2a = calculate_mask_all(x_size, ss, sss, df, True)
-        mask_sv_a2w = calculate_mask_all(x_size, ss[::-1], sss[::-1], df, False)
-        mask_sv_w2a = calculate_mask_all(x_size, ss[::-1], sss[::-1], df, True)
-        return {
-            "table_w": table_w,
-            "table_sh": table_sh,
-            "table_sv": table_sv,
-            "index_w": index_w,
-            "index_sh_a2w": index_sh_a2w,
-            "index_sh_w2a": index_sh_w2a,
-            "index_sv_a2w": index_sv_a2w,
-            "index_sv_w2a": index_sv_w2a,
-            "mask_w": mask_w,
-            "mask_sh_a2w": mask_sh_a2w,
-            "mask_sh_w2a": mask_sh_w2a,
-            "mask_sv_a2w": mask_sv_a2w,
-            "mask_sv_w2a": mask_sv_w2a,
-        }
-
-    def get_table_index_mask(self, device=None, input_resolution=None):
-        # Used during forward pass
-        if input_resolution == self.input_resolution:
-            return {
-                "table_w": self.table_w,
-                "table_sh": self.table_sh,
-                "table_sv": self.table_sv,
-                "index_w": self.index_w,
-                "index_sh_a2w": self.index_sh_a2w,
-                "index_sh_w2a": self.index_sh_w2a,
-                "index_sv_a2w": self.index_sv_a2w,
-                "index_sv_w2a": self.index_sv_w2a,
-                "mask_w": self.mask_w,
-                "mask_sh_a2w": self.mask_sh_a2w,
-                "mask_sh_w2a": self.mask_sh_w2a,
-                "mask_sv_a2w": self.mask_sv_a2w,
-                "mask_sv_w2a": self.mask_sv_w2a,
-            }
-        else:
-            table_index_mask = self.set_table_index_mask(input_resolution)
-            for k, v in table_index_mask.items():
-                table_index_mask[k] = v.to(device)
-            return table_index_mask
-
 
 @ARCH_REGISTRY.register()
 class MYIR2(nn.Module):
 
     def __init__(
             self,
-            img_size=128,
+            img_size=512,
             in_chans=6,
-            embed_dim=48,
+            embed_dim=64,
             upscale=1,
             img_range=1.0,
             upsampler="",
-            depths=[2, 2, 2, 8,2,2,4,4],
-            window_size=16,
-            stripe_size=[16, 32],  # used for stripe window attention
-            stripe_groups=[None, None],
-            stripe_shift=False,
+            depths=[2, 2, 2, 6, 2, 2, 2, 2],
             mlp_ratio=2.0,
             qkv_bias=True,
-            qkv_proj_type="linear",
-            anchor_proj_type="avgpool",
-            anchor_one_stage=True,
-            anchor_window_down_factor=4,
-            out_proj_type="linear",
-            local_connection=True,
             drop_rate=0.0,
             attn_drop_rate=0.0,
             drop_path_rate=0.1,
             norm_layer=LayerNorm,
-            pretrained_window_size=[0, 0],
-            pretrained_stripe_size=[0, 0],
             conv_type="1conv",
             init_method="n",  # initialization method of the weight parameters used to train large scale models.
-            fairscale_checkpoint=False,  # fairscale activation checkpointing
-            offload_to_cpu=False,
-            euclidean_dist=False,
             **kwargs,
     ):
         super(MYIR2, self).__init__()
@@ -363,15 +233,8 @@ class MYIR2(nn.Module):
         self.upscale = upscale
         self.upsampler = upsampler
         self.img_range = img_range
-        if in_chans == 3:
-            rgb_mean = (0.4488, 0.4371, 0.4040)
-            self.mean = torch.Tensor(rgb_mean).view(1, 3, 1, 1)
-        else:
-            self.mean = torch.zeros(1, 1, 1, 1)
 
         self.input_resolution = to_2tuple(img_size)
-        self.window_size = to_2tuple(window_size)
-
         # Head of the network. First convolution.
         self.conv_first = nn.Conv2d(in_chans, embed_dim, 3, 1, 1)
 
@@ -381,276 +244,148 @@ class MYIR2(nn.Module):
 
         # stochastic depth
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]
-        # stochastic depth decay rule
-        args = OmegaConf.create(
-            {
-                "out_proj_type": out_proj_type,
-                "local_connection": local_connection,
-                "euclidean_dist": euclidean_dist,
-            }
-        )
 
         self.layers = nn.ModuleList()
         self.encoder_level1 = TransformerStage(
             dim=embed_dim,
             input_resolution=self.input_resolution,
             depth=depths[0],
-            num_heads_window=3,
-            num_heads_stripe=3,
-            window_size=self.window_size,
-            stripe_size=stripe_size,
-            stripe_groups=stripe_groups,
-            stripe_shift=stripe_shift,
+
             mlp_ratio=mlp_ratio,
             qkv_bias=qkv_bias,
-            qkv_proj_type=qkv_proj_type,
-            anchor_proj_type=anchor_proj_type,
-            anchor_one_stage=anchor_one_stage,
-            anchor_window_down_factor=anchor_window_down_factor,
+
             drop=drop_rate,
             attn_drop=attn_drop_rate,
-            drop_path=dpr[
-                      sum(depths[:0]): sum(depths[: 0 + 1])
-                      ],  # no impact on SR results
+            drop_path=dpr[sum(depths[:2]): sum(depths[: 2 + 1])],  # no impact on SR results
             norm_layer=norm_layer,
-            pretrained_window_size=pretrained_window_size,
-            pretrained_stripe_size=pretrained_stripe_size,
             conv_type=conv_type,
             init_method=init_method,
-            fairscale_checkpoint=fairscale_checkpoint,
-            offload_to_cpu=offload_to_cpu,
-            args=args,
         )
+        self.encoder_level1 = checkpoint_wrapper(self.encoder_level1)
 
-        self.down1_2 = Downsample(embed_dim)  ## From Level 1 to Level 2
+        self.down1_2 = checkpoint_wrapper(Downsample(embed_dim))  ## From Level 1 to Level 2
         self.encoder_level2 = TransformerStage(
             dim=embed_dim * 2,
             input_resolution=to_2tuple(int(img_size / 2)),
             depth=depths[1],
-            num_heads_window=3,
-            num_heads_stripe=3,
-            window_size=self.window_size,
-            stripe_size=stripe_size,
-            stripe_groups=stripe_groups,
-            stripe_shift=stripe_shift,
             mlp_ratio=mlp_ratio,
             qkv_bias=qkv_bias,
-            qkv_proj_type=qkv_proj_type,
-            anchor_proj_type=anchor_proj_type,
-            anchor_one_stage=anchor_one_stage,
-            anchor_window_down_factor=anchor_window_down_factor,
             drop=drop_rate,
             attn_drop=attn_drop_rate,
-            drop_path=dpr[
-                      sum(depths[:1]): sum(depths[: 1 + 1])
-                      ],  # no impact on SR results
+            drop_path=dpr[sum(depths[:2]): sum(depths[: 2 + 1])],
             norm_layer=norm_layer,
-            pretrained_window_size=pretrained_window_size,
-            pretrained_stripe_size=pretrained_stripe_size,
             conv_type=conv_type,
             init_method=init_method,
-            fairscale_checkpoint=fairscale_checkpoint,
-            offload_to_cpu=offload_to_cpu,
-            args=args,
         )
+        self.encoder_level2 = checkpoint_wrapper(self.encoder_level2)
 
-        self.down2_3 = Downsample(int(embed_dim * 2 ** 1))  ## From Level 2 to Level 3
+        self.down2_3 = checkpoint_wrapper(Downsample(int(embed_dim * 2 ** 1)))  ## From Level 2 to Level 3
         self.encoder_level3 = TransformerStage(
             dim=embed_dim * 4,
             input_resolution=to_2tuple(int(img_size / 4)),
             depth=depths[2],
-            num_heads_window=3,
-            num_heads_stripe=3,
-            window_size=self.window_size,
-            stripe_size=stripe_size,
-            stripe_groups=stripe_groups,
-            stripe_shift=stripe_shift,
+
             mlp_ratio=mlp_ratio,
             qkv_bias=qkv_bias,
-            qkv_proj_type=qkv_proj_type,
-            anchor_proj_type=anchor_proj_type,
-            anchor_one_stage=anchor_one_stage,
-            anchor_window_down_factor=anchor_window_down_factor,
+
             drop=drop_rate,
             attn_drop=attn_drop_rate,
-            drop_path=dpr[
-                      sum(depths[:2]): sum(depths[: 2 + 1])
-                      ],  # no impact on SR results
+            drop_path=dpr[sum(depths[:2]): sum(depths[: 2 + 1])],  # no impact on SR results
             norm_layer=norm_layer,
-            pretrained_window_size=pretrained_window_size,
-            pretrained_stripe_size=pretrained_stripe_size,
             conv_type=conv_type,
             init_method=init_method,
-            fairscale_checkpoint=fairscale_checkpoint,
-            offload_to_cpu=offload_to_cpu,
-            args=args,
         )
+        self.encoder_level3 = checkpoint_wrapper(self.encoder_level3)
 
-        self.down3_4 = Downsample(int(embed_dim * 2 ** 2))  ## From Level 3 to Level 4
+        self.down3_4 = checkpoint_wrapper(Downsample(int(embed_dim * 2 ** 2)))  ## From Level 3 to Level 4
         self.latent = TransformerStage(
             dim=embed_dim * 8,
             input_resolution=to_2tuple(int(img_size / 8)),
             depth=depths[3],
-            num_heads_window=3,
-            num_heads_stripe=3,
-            window_size=to_2tuple(int(window_size / 2)),
-            stripe_size=to_2tuple(int(window_size / 2)),
-            stripe_groups=stripe_groups,
-            stripe_shift=stripe_shift,
             mlp_ratio=mlp_ratio,
             qkv_bias=qkv_bias,
-            qkv_proj_type=qkv_proj_type,
-            anchor_proj_type=anchor_proj_type,
-            anchor_one_stage=anchor_one_stage,
-            anchor_window_down_factor=anchor_window_down_factor,
             drop=drop_rate,
             attn_drop=attn_drop_rate,
-            drop_path=dpr[
-                      sum(depths[:3]): sum(depths[: 3 + 1])
-                      ],  # no impact on SR results
+            drop_path=dpr[sum(depths[:3]): sum(depths[: 3 + 1])],  # no impact on SR results
             norm_layer=norm_layer,
-            pretrained_window_size=pretrained_window_size,
-            pretrained_stripe_size=pretrained_stripe_size,
             conv_type=conv_type,
             init_method=init_method,
-            fairscale_checkpoint=fairscale_checkpoint,
-            offload_to_cpu=offload_to_cpu,
-            args=args,
         )
+        self.latent = checkpoint_wrapper(self.latent)
 
-        self.up4_3 = Upsample(int(embed_dim * 2 ** 3))  ## From Level 4 to Level 3
-        # self.reduce_chan_level3 = nn.Conv2d(int(embed_dim * 2 ** 3), int(embed_dim * 2 ** 2), kernel_size=1, bias=False)
+        self.up4_3 = checkpoint_wrapper(Upsample(int(embed_dim * 2 ** 3)))  ## From Level 4 to Level 3
         self.reduce_chan_level3 = ReduceChan(int(embed_dim * 2 ** 3))
+        self.reduce_chan_level3 = checkpoint_wrapper(self.reduce_chan_level3)
+
         self.decoder_level3 = TransformerStage(
             dim=embed_dim * 4,
             input_resolution=to_2tuple(int(img_size / 4)),
             depth=depths[4],
-            num_heads_window=3,
-            num_heads_stripe=3,
-            window_size=self.window_size,
-            stripe_size=stripe_size,
-            stripe_groups=stripe_groups,
-            stripe_shift=stripe_shift,
             mlp_ratio=mlp_ratio,
             qkv_bias=qkv_bias,
-            qkv_proj_type=qkv_proj_type,
-            anchor_proj_type=anchor_proj_type,
-            anchor_one_stage=anchor_one_stage,
-            anchor_window_down_factor=anchor_window_down_factor,
             drop=drop_rate,
             attn_drop=attn_drop_rate,
-            drop_path=dpr[
-                      sum(depths[:4]): sum(depths[: 4 + 1])
-                      ],  # no impact on SR results
+            drop_path=dpr[sum(depths[:4]): sum(depths[: 4 + 1])],  # no impact on SR results
             norm_layer=norm_layer,
-            pretrained_window_size=pretrained_window_size,
-            pretrained_stripe_size=pretrained_stripe_size,
             conv_type=conv_type,
             init_method=init_method,
-            fairscale_checkpoint=fairscale_checkpoint,
-            offload_to_cpu=offload_to_cpu,
-            args=args,
         )
+        self.decoder_level3 = checkpoint_wrapper(self.decoder_level3)
 
-        self.up3_2 = Upsample(int(embed_dim * 2 ** 2))  ## From Level 3 to Level 2
-        # self.reduce_chan_level2 = nn.Conv2d(int(embed_dim * 2 ** 2), int(embed_dim * 2 ** 1), kernel_size=1, bias=False)
+        self.up3_2 = checkpoint_wrapper(Upsample(int(embed_dim * 2 ** 2)))  ## From Level 3 to Level 2
         self.reduce_chan_level2 = ReduceChan(int(embed_dim * 2 ** 2))
+        self.decoder_level2 = checkpoint_wrapper(self.reduce_chan_level2)
+
         self.decoder_level2 = TransformerStage(
             dim=embed_dim * 2,
             input_resolution=to_2tuple(int(img_size / 2)),
             depth=depths[5],
-            num_heads_window=3,
-            num_heads_stripe=3,
-            window_size=self.window_size,
-            stripe_size=stripe_size,
-            stripe_groups=stripe_groups,
-            stripe_shift=stripe_shift,
             mlp_ratio=mlp_ratio,
             qkv_bias=qkv_bias,
-            qkv_proj_type=qkv_proj_type,
-            anchor_proj_type=anchor_proj_type,
-            anchor_one_stage=anchor_one_stage,
-            anchor_window_down_factor=anchor_window_down_factor,
             drop=drop_rate,
             attn_drop=attn_drop_rate,
             drop_path=dpr[
                       sum(depths[:5]): sum(depths[: 5 + 1])
                       ],  # no impact on SR results
             norm_layer=norm_layer,
-            pretrained_window_size=pretrained_window_size,
-            pretrained_stripe_size=pretrained_stripe_size,
             conv_type=conv_type,
             init_method=init_method,
-            fairscale_checkpoint=fairscale_checkpoint,
-            offload_to_cpu=offload_to_cpu,
-            args=args,
         )
+        self.decoder_level2 = checkpoint_wrapper(self.decoder_level2)
 
-        self.up2_1 = Upsample(int(embed_dim * 2 ** 1))  ## From Level 2 to Level 1  (NO 1x1 conv to reduce channels)
-        self.reduce_chan_level1 = ReduceChan(int(embed_dim * 2 ** 1))
+        self.up2_1 = checkpoint_wrapper(
+            Upsample(int(embed_dim * 2 ** 1)))  ## From Level 2 to Level 1  (NO 1x1 conv to reduce channels)
+        self.reduce_chan_level1 = checkpoint_wrapper(ReduceChan(int(embed_dim * 2 ** 1)))
 
         self.decoder_level1 = TransformerStage(
             dim=embed_dim,
             input_resolution=self.input_resolution,
             depth=depths[6],
-            num_heads_window=3,
-            num_heads_stripe=3,
-            window_size=self.window_size,
-            stripe_size=stripe_size,
-            stripe_groups=stripe_groups,
-            stripe_shift=stripe_shift,
             mlp_ratio=mlp_ratio,
             qkv_bias=qkv_bias,
-            qkv_proj_type=qkv_proj_type,
-            anchor_proj_type=anchor_proj_type,
-            anchor_one_stage=anchor_one_stage,
-            anchor_window_down_factor=anchor_window_down_factor,
             drop=drop_rate,
             attn_drop=attn_drop_rate,
-            drop_path=dpr[
-                      sum(depths[:6]): sum(depths[: 6 + 1])
-                      ],  # no impact on SR results
+            drop_path=dpr[sum(depths[:2]): sum(depths[: 2 + 1])],
             norm_layer=norm_layer,
-            pretrained_window_size=pretrained_window_size,
-            pretrained_stripe_size=pretrained_stripe_size,
             conv_type=conv_type,
             init_method=init_method,
-            fairscale_checkpoint=fairscale_checkpoint,
-            offload_to_cpu=offload_to_cpu,
-            args=args,
         )
+        self.decoder_level1 = checkpoint_wrapper(self.decoder_level1)
 
         self.refinement = TransformerStage(
             dim=embed_dim,
             input_resolution=self.input_resolution,
             depth=depths[7],
-            num_heads_window=3,
-            num_heads_stripe=3,
-            window_size=self.window_size,
-            stripe_size=stripe_size,
-            stripe_groups=stripe_groups,
-            stripe_shift=stripe_shift,
             mlp_ratio=mlp_ratio,
             qkv_bias=qkv_bias,
-            qkv_proj_type=qkv_proj_type,
-            anchor_proj_type=anchor_proj_type,
-            anchor_one_stage=anchor_one_stage,
-            anchor_window_down_factor=anchor_window_down_factor,
             drop=drop_rate,
             attn_drop=attn_drop_rate,
-            drop_path=dpr[
-                      sum(depths[:7]): sum(depths[: 7 + 1])
-                      ],  # no impact on SR results
+            drop_path=dpr[sum(depths[:2]): sum(depths[: 2 + 1])],
             norm_layer=norm_layer,
-            pretrained_window_size=pretrained_window_size,
-            pretrained_stripe_size=pretrained_stripe_size,
             conv_type=conv_type,
             init_method=init_method,
-            fairscale_checkpoint=fairscale_checkpoint,
-            offload_to_cpu=offload_to_cpu,
-            args=args,
         )
-
+        self.refinement = checkpoint_wrapper(self.refinement)
         self.norm_end = norm_layer(embed_dim)
 
         # Tail of the network
@@ -664,14 +399,6 @@ class MYIR2(nn.Module):
         if init_method in ["l", "w"] or init_method.find("t") >= 0:
             for layer in self.layers:
                 layer._init_weights()
-
-        hidden_features = int(3 * 2.66)
-        self.project_in = nn.Conv2d(3, hidden_features * 2, kernel_size=1, bias=False)
-        self.dwconv = nn.Conv2d(hidden_features * 2, hidden_features * 2, kernel_size=3, stride=1, padding=1,
-                                groups=hidden_features * 2, bias=True, )
-
-        self.project_out = nn.Conv2d(hidden_features, 3, kernel_size=1, bias=False)
-        self.temperature = nn.Parameter(torch.ones(3, 1, 1))
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
@@ -699,13 +426,9 @@ class MYIR2(nn.Module):
 
     def forward_features(self, x):
         x_size = (x.shape[2], x.shape[3])
-        # x = bchw_to_blc(x)
         x = self.norm_start(x)
         x = self.pos_drop(x)
 
-        # table_index_mask = self.get_table_index_mask(x.device, x_size)
-        # for layer in self.layers:
-        #     x = layer(x, x_size, table_index_mask)
         out_enc_level1 = self.encoder_level1(x, x_size)
 
         inp_enc_level2 = self.down1_2(out_enc_level1)
@@ -763,25 +486,10 @@ class MYIR2(nn.Module):
     def flops(self):
         pass
 
-    def convert_checkpoint(self, state_dict):
-        for k in list(state_dict.keys()):
-            if (
-                    k.find("relative_coords_table") >= 0
-                    or k.find("relative_position_index") >= 0
-                    or k.find("attn_mask") >= 0
-                    or k.find("model.table_") >= 0
-                    or k.find("model.index_") >= 0
-                    or k.find("model.mask_") >= 0
-                    # or k.find(".upsample.") >= 0
-            ):
-                state_dict.pop(k)
-                print(k)
-        return state_dict
-
 
 if __name__ == '__main__':
     model = MYIR2()
     model.cuda()
     from torchsummary import summary
 
-    summary(model, (6, 128, 128))
+    summary(model, (6, 512, 512))

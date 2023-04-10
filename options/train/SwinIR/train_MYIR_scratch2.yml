@@ -30,7 +30,8 @@ datasets:
     num_worker_per_gpu: 1
     batch_size_per_gpu: 1
     dataset_enlarge_ratio: 1
-    prefetch_mode: ~
+    prefetch_mode: cuda
+    pin_memory: true
     ### -------------Progressive training--------------------------
     mini_batch_sizes: [ 1,1,1,1,1,1 ]             # Batch size per gpu
     iters: [ 92000,64000,48000,36000,36000,24000 ]
@@ -59,27 +60,20 @@ network_g:
   in_chans: 6
   img_size: 128
   img_range: 1.
-  depths: [4, 6, 6, 8,6,6,4,4]
+  depths: [2, 2, 2, 8,2,2,2,2]
   embed_dim: 48
   mlp_ratio: 2
   #  upsampler: 'pixelshuffle'
   resi_connection: '1conv'
   upsampler: ""
-  window_size: 16
-  stripe_size:
-    - 16
-    - 32
-  stripe_groups:
-    - null
-    - null
-  anchor_window_down_factor: 4
   fairscale_checkpoint: false
 
 # path
 path:
   pretrain_network_g: ~
   strict_load_g: true
-  resume_state: ~
+  resume_state: /home/lab/code1/IR/experiments/train_MYIR_scratch/training_states/4000.state
+#  resume_state: ~
 
 # training settings
 train:
@@ -113,7 +107,7 @@ train:
 
 # validation settings
 val:
-  val_freq: !!float 2e1
+  val_freq: !!float 6e1
   save_img: false
 
   metrics:

@@ -9,7 +9,7 @@ from basicsr.utils.registry import ARCH_REGISTRY
 import torch.nn.functional as F
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 
-from common.mixed_attn_block_efficient import EfficientMixAttnTransformerBlock, _get_stripe_info
+from common.mixed_attn_block_efficient import EfficientMixAttnTransformerBlock
 from common.ops import bchw_to_blc, blc_to_bchw, get_relative_coords_table_all, get_relative_position_index_simple, \
     calculate_mask, calculate_mask_all
 from common.swin_v1_block import build_last_conv

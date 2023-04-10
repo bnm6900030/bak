@@ -21,6 +21,8 @@ class MYModel(BaseModel):
         # define network
         self.net_g = build_network(opt['network_g'])
         self.net_g = self.model_to_device(self.net_g)
+        if self.opt['train'].get('compile', False):
+            self.net_g = torch.compile(self.net_g)
         self.print_network(self.net_g)
 
         # load pretrained models

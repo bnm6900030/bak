@@ -79,7 +79,10 @@ class BaseModel():
         net_g_ema_params = dict(self.net_g_ema.named_parameters())
 
         for k in net_g_ema_params.keys():
-            net_g_ema_params[k].data.mul_(decay).add_(net_g_params[k].data, alpha=1 - decay)
+            if self.opt['train'].get('compile', False):
+                net_g_ema_params[k].data.mul_(decay).add_(net_g_params['_orig_mod.'+k].data, alpha=1 - decay)
+            else:
+                net_g_ema_params[k].data.mul_(decay).add_(net_g_params[k].data, alpha=1 - decay)
 
     def get_current_log(self):
         return self.log_dict

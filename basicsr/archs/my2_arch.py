@@ -103,7 +103,6 @@ class TransformerStage(nn.Module):
         stripe_groups (list[int]): Number of stripe groups. Default: [None, None].
         stripe_shift (bool): whether to shift the stripes. This is used as an ablation study.
         mlp_ratio (float): Ratio of mlp hidden dim to embedding dim.
-        qkv_bias (bool, optional): If True, add a learnable bias to query, key, value. Default: True
         qkv_proj_type (str): QKV projection type. Default: linear. Choices: linear, separable_conv.
         anchor_proj_type (str): Anchor projection type. Default: avgpool. Choices: avgpool, maxpool, conv2d, separable_conv, patchmerging.
         anchor_one_stage (bool): Whether to use one operator or multiple progressive operators to reduce feature map resolution. Default: True.
@@ -135,13 +134,13 @@ class TransformerStage(nn.Module):
             input_resolution,
             depth,
             mlp_ratio=4.0,
-            qkv_bias=True,
             drop=0.0,
             attn_drop=0.0,
             drop_path=0.0,
             norm_layer=nn.LayerNorm,
             conv_type="1conv",
             init_method="",
+            is_NA=True,
 
     ):
         super().__init__()
@@ -155,7 +154,8 @@ class TransformerStage(nn.Module):
                 dim=dim,
                 input_resolution=input_resolution,
                 mlp_ratio=mlp_ratio,
-                qkv_bias=qkv_bias,
+                is_NA=is_NA,
+
                 drop=drop,
                 attn_drop=attn_drop,
                 drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path,
@@ -192,7 +192,7 @@ class TransformerStage(nn.Module):
                     f"Parameter initialization method {self.init_method} not implemented in TransformerStage."
                 )
 
-    def forward(self, x, x_size):
+    def forward(self, x):
         res = x
         for blk in self.blocks:
             res = blk(res)
@@ -209,21 +209,21 @@ class MYIR2(nn.Module):
 
     def __init__(
             self,
-            img_size=512,
+            img_size=128,
             in_chans=6,
             embed_dim=64,
             upscale=1,
             img_range=1.0,
             upsampler="",
-            depths=[2, 2, 2, 6, 2, 2, 2, 2],
+            depths=[2, 2, 6, 2, 6, 2, 2, 2],
             mlp_ratio=2.0,
-            qkv_bias=True,
             drop_rate=0.0,
             attn_drop_rate=0.0,
             drop_path_rate=0.1,
             norm_layer=LayerNorm,
             conv_type="1conv",
             init_method="n",  # initialization method of the weight parameters used to train large scale models.
+            fairscale_checkpoint=False,
             **kwargs,
     ):
         super(MYIR2, self).__init__()
@@ -250,43 +250,41 @@ class MYIR2(nn.Module):
             dim=embed_dim,
             input_resolution=self.input_resolution,
             depth=depths[0],
-
+            is_NA=False,
             mlp_ratio=mlp_ratio,
-            qkv_bias=qkv_bias,
 
             drop=drop_rate,
             attn_drop=attn_drop_rate,
-            drop_path=dpr[sum(depths[:2]): sum(depths[: 2 + 1])],  # no impact on SR results
+            drop_path=dpr[sum(depths[:0]): sum(depths[: 0 + 1])],  # no impact on SR results
             norm_layer=norm_layer,
             conv_type=conv_type,
             init_method=init_method,
         )
-        self.encoder_level1 = checkpoint_wrapper(self.encoder_level1)
 
-        self.down1_2 = checkpoint_wrapper(Downsample(embed_dim))  ## From Level 1 to Level 2
+        self.down1_2 = Downsample(embed_dim)  ## From Level 1 to Level 2
+
         self.encoder_level2 = TransformerStage(
             dim=embed_dim * 2,
             input_resolution=to_2tuple(int(img_size / 2)),
             depth=depths[1],
             mlp_ratio=mlp_ratio,
-            qkv_bias=qkv_bias,
+            is_NA=False,
+
             drop=drop_rate,
             attn_drop=attn_drop_rate,
-            drop_path=dpr[sum(depths[:2]): sum(depths[: 2 + 1])],
+            drop_path=dpr[sum(depths[:1]): sum(depths[: 1 + 1])],
             norm_layer=norm_layer,
             conv_type=conv_type,
             init_method=init_method,
         )
-        self.encoder_level2 = checkpoint_wrapper(self.encoder_level2)
 
-        self.down2_3 = checkpoint_wrapper(Downsample(int(embed_dim * 2 ** 1)))  ## From Level 2 to Level 3
+        self.down2_3 = Downsample(int(embed_dim * 2 ** 1))  ## From Level 2 to Level 3
         self.encoder_level3 = TransformerStage(
             dim=embed_dim * 4,
             input_resolution=to_2tuple(int(img_size / 4)),
             depth=depths[2],
 
             mlp_ratio=mlp_ratio,
-            qkv_bias=qkv_bias,
 
             drop=drop_rate,
             attn_drop=attn_drop_rate,
@@ -295,15 +293,14 @@ class MYIR2(nn.Module):
             conv_type=conv_type,
             init_method=init_method,
         )
-        self.encoder_level3 = checkpoint_wrapper(self.encoder_level3)
 
-        self.down3_4 = checkpoint_wrapper(Downsample(int(embed_dim * 2 ** 2)))  ## From Level 3 to Level 4
+        self.down3_4 = Downsample(int(embed_dim * 2 ** 2))  ## From Level 3 to Level 4
         self.latent = TransformerStage(
             dim=embed_dim * 8,
             input_resolution=to_2tuple(int(img_size / 8)),
             depth=depths[3],
             mlp_ratio=mlp_ratio,
-            qkv_bias=qkv_bias,
+
             drop=drop_rate,
             attn_drop=attn_drop_rate,
             drop_path=dpr[sum(depths[:3]): sum(depths[: 3 + 1])],  # no impact on SR results
@@ -311,18 +308,16 @@ class MYIR2(nn.Module):
             conv_type=conv_type,
             init_method=init_method,
         )
-        self.latent = checkpoint_wrapper(self.latent)
 
-        self.up4_3 = checkpoint_wrapper(Upsample(int(embed_dim * 2 ** 3)))  ## From Level 4 to Level 3
+        self.up4_3 = Upsample(int(embed_dim * 2 ** 3))  ## From Level 4 to Level 3
         self.reduce_chan_level3 = ReduceChan(int(embed_dim * 2 ** 3))
-        self.reduce_chan_level3 = checkpoint_wrapper(self.reduce_chan_level3)
 
         self.decoder_level3 = TransformerStage(
             dim=embed_dim * 4,
             input_resolution=to_2tuple(int(img_size / 4)),
             depth=depths[4],
             mlp_ratio=mlp_ratio,
-            qkv_bias=qkv_bias,
+
             drop=drop_rate,
             attn_drop=attn_drop_rate,
             drop_path=dpr[sum(depths[:4]): sum(depths[: 4 + 1])],  # no impact on SR results
@@ -330,18 +325,15 @@ class MYIR2(nn.Module):
             conv_type=conv_type,
             init_method=init_method,
         )
-        self.decoder_level3 = checkpoint_wrapper(self.decoder_level3)
 
-        self.up3_2 = checkpoint_wrapper(Upsample(int(embed_dim * 2 ** 2)))  ## From Level 3 to Level 2
+        self.up3_2 = Upsample(int(embed_dim * 2 ** 2))  ## From Level 3 to Level 2
         self.reduce_chan_level2 = ReduceChan(int(embed_dim * 2 ** 2))
-        self.decoder_level2 = checkpoint_wrapper(self.reduce_chan_level2)
 
         self.decoder_level2 = TransformerStage(
             dim=embed_dim * 2,
             input_resolution=to_2tuple(int(img_size / 2)),
             depth=depths[5],
             mlp_ratio=mlp_ratio,
-            qkv_bias=qkv_bias,
             drop=drop_rate,
             attn_drop=attn_drop_rate,
             drop_path=dpr[
@@ -350,42 +342,58 @@ class MYIR2(nn.Module):
             norm_layer=norm_layer,
             conv_type=conv_type,
             init_method=init_method,
-        )
-        self.decoder_level2 = checkpoint_wrapper(self.decoder_level2)
+            is_NA=False,
 
-        self.up2_1 = checkpoint_wrapper(
-            Upsample(int(embed_dim * 2 ** 1)))  ## From Level 2 to Level 1  (NO 1x1 conv to reduce channels)
-        self.reduce_chan_level1 = checkpoint_wrapper(ReduceChan(int(embed_dim * 2 ** 1)))
+        )
+
+        self.up2_1 = Upsample(int(embed_dim * 2 ** 1))  ## From Level 2 to Level 1  (NO 1x1 conv to reduce channels)
+        self.reduce_chan_level1 = ReduceChan(int(embed_dim * 2 ** 1))
 
         self.decoder_level1 = TransformerStage(
             dim=embed_dim,
             input_resolution=self.input_resolution,
             depth=depths[6],
             mlp_ratio=mlp_ratio,
-            qkv_bias=qkv_bias,
             drop=drop_rate,
+            is_NA=False,
             attn_drop=attn_drop_rate,
-            drop_path=dpr[sum(depths[:2]): sum(depths[: 2 + 1])],
+            drop_path=dpr[sum(depths[:6]): sum(depths[: 6 + 1])],
             norm_layer=norm_layer,
             conv_type=conv_type,
             init_method=init_method,
         )
-        self.decoder_level1 = checkpoint_wrapper(self.decoder_level1)
 
         self.refinement = TransformerStage(
             dim=embed_dim,
             input_resolution=self.input_resolution,
             depth=depths[7],
             mlp_ratio=mlp_ratio,
-            qkv_bias=qkv_bias,
+
             drop=drop_rate,
             attn_drop=attn_drop_rate,
-            drop_path=dpr[sum(depths[:2]): sum(depths[: 2 + 1])],
+            drop_path=dpr[sum(depths[:7]): sum(depths[:7 + 1])],
             norm_layer=norm_layer,
             conv_type=conv_type,
             init_method=init_method,
         )
-        self.refinement = checkpoint_wrapper(self.refinement)
+
+        if fairscale_checkpoint:
+            self.encoder_level1 = checkpoint_wrapper(self.encoder_level1)
+            self.encoder_level2 = checkpoint_wrapper(self.encoder_level2)
+            self.encoder_level3 = checkpoint_wrapper(self.encoder_level3)
+            self.down1_2 = checkpoint_wrapper(self.down1_2)
+            self.down2_3 = checkpoint_wrapper(self.down2_3)
+            self.down3_4 = checkpoint_wrapper(self.down3_4)
+            self.latent = checkpoint_wrapper(self.latent)
+            self.up4_3 = checkpoint_wrapper(self.up4_3)
+            self.up3_2 = checkpoint_wrapper(self.up3_2)
+            self.up2_1 = checkpoint_wrapper(self.up2_1)
+            self.reduce_chan_level1 = checkpoint_wrapper(self.reduce_chan_level1)
+            self.reduce_chan_level2 = checkpoint_wrapper(self.reduce_chan_level2)
+            self.decoder_level3 = checkpoint_wrapper(self.decoder_level3)
+            self.decoder_level2 = checkpoint_wrapper(self.decoder_level2)
+            self.decoder_level1 = checkpoint_wrapper(self.decoder_level1)
+            self.refinement = checkpoint_wrapper(self.refinement)
         self.norm_end = norm_layer(embed_dim)
 
         # Tail of the network
@@ -425,39 +433,38 @@ class MYIR2(nn.Module):
         return {"relative_position_bias_table"}
 
     def forward_features(self, x):
-        x_size = (x.shape[2], x.shape[3])
         x = self.norm_start(x)
         x = self.pos_drop(x)
 
-        out_enc_level1 = self.encoder_level1(x, x_size)
+        out_enc_level1 = self.encoder_level1(x)
 
         inp_enc_level2 = self.down1_2(out_enc_level1)
-        out_enc_level2 = self.encoder_level2(inp_enc_level2, (int(x_size[0] / 2), int(x_size[1] / 2)), )
+        out_enc_level2 = self.encoder_level2(inp_enc_level2)
 
         inp_enc_level3 = self.down2_3(out_enc_level2, )
-        out_enc_level3 = self.encoder_level3(inp_enc_level3, (int(x_size[0] / 4), int(x_size[1] / 4)), )
+        out_enc_level3 = self.encoder_level3(inp_enc_level3)
 
         inp_enc_level4 = self.down3_4(out_enc_level3, )
-        latent = self.latent(inp_enc_level4, (int(x_size[0] / 8), int(x_size[1] / 8)), )
+        latent = self.latent(inp_enc_level4, )
 
         inp_dec_level3 = self.up4_3(latent, )
         inp_dec_level3 = torch.cat([inp_dec_level3, out_enc_level3], 1)
         inp_dec_level3 = self.reduce_chan_level3(inp_dec_level3, )
-        out_dec_level3 = self.decoder_level3(inp_dec_level3, (int(x_size[0] / 4), int(x_size[1] / 4)), )
+        out_dec_level3 = self.decoder_level3(inp_dec_level3, )
 
         inp_dec_level2 = self.up3_2(out_dec_level3, )
         inp_dec_level2 = torch.cat([inp_dec_level2, out_enc_level2], 1)
         inp_dec_level2 = self.reduce_chan_level2(inp_dec_level2, )
-        out_dec_level2 = self.decoder_level2(inp_dec_level2, (int(x_size[0] / 2), int(x_size[1] / 2)), )
+        out_dec_level2 = self.decoder_level2(inp_dec_level2, )
 
         inp_dec_level1 = self.up2_1(out_dec_level2)
         inp_dec_level1 = torch.cat([inp_dec_level1, out_enc_level1], 1)
         inp_dec_level1 = self.reduce_chan_level1(inp_dec_level1)
-        out_dec_level1 = self.decoder_level1(inp_dec_level1, x_size, )
+        out_dec_level1 = self.decoder_level1(inp_dec_level1, )
 
-        out_dec_level1 = self.refinement(out_dec_level1, x_size, )
+        out_dec_level1 = self.refinement(out_dec_level1, )
 
-        x = self.norm_end(out_dec_level1)  # B L C
+        x = self.norm_end(out_dec_level1)
 
         return x
 
@@ -492,4 +499,4 @@ if __name__ == '__main__':
     model.cuda()
     from torchsummary import summary
 
-    summary(model, (6, 512, 512))
+    summary(model, (6, 128, 128))

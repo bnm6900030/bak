@@ -1,5 +1,4 @@
 
-from natten import NeighborhoodAttention2D as NeighborhoodAttention
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -18,7 +17,6 @@ class NAttention(nn.Module):
     def __init__(
         self,
         dim,
-        channel,
         num_heads,
         kernel_size,
         dilation=1,
@@ -36,10 +34,9 @@ class NAttention(nn.Module):
         self.dilation = dilation or 1
         self.window_size = self.kernel_size * self.dilation
 
-        # self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
-        self.qkv = nn.Conv2d(channel, channel*3, kernel_size=1, bias=False)
-        self.qkv_dwconv = nn.Conv2d(channel*3, channel*3, kernel_size=3, stride=1, padding=1, groups=channel*3, bias=False)
-
+        # self.qkv = nn.Conv2d(dim, dim*3, kernel_size=1, bias=False)
+        # self.qkv_dwconv = nn.Conv2d(dim*3, dim*3, kernel_size=3, stride=1, padding=1, groups=dim*3, bias=False)
+        self.qkv = nn.Linear(dim, dim * 3, bias=True)
 
         if bias:
             self.rpb = nn.Parameter(
@@ -49,12 +46,14 @@ class NAttention(nn.Module):
         else:
             self.register_parameter("rpb", None)
         self.attn_drop = nn.Dropout(attn_drop)
-        self.proj = nn.Conv2d(channel, channel, kernel_size=1, bias=False)
+        # self.proj = nn.Conv2d(dim, dim, kernel_size=1, bias=False)
+        self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
-        self.temperature = nn.Parameter(torch.ones(channel, 1, 1))
+        # self.temperature = nn.Parameter(torch.ones(dim, 1, 1))
 
 
     def forward(self, x):
+        x = x.permute(0, 2, 3, 1)
         B, Hp, Wp, C = x.shape
         H, W = int(Hp), int(Wp)
         pad_l = pad_t = pad_r = pad_b = 0
@@ -73,15 +72,14 @@ class NAttention(nn.Module):
         q = q * self.scale
         attn = natten2dqkrpb(q, k, self.rpb, self.kernel_size, self.dilation)
 
-        attn = attn * self.temperature
         attn = attn.softmax(dim=-1)
         attn = self.attn_drop(attn)
         x = natten2dav(attn, v, self.kernel_size, self.dilation)
         x = x.permute(0, 2, 3, 1, 4).reshape(B, H, W, C)
         if pad_r or pad_b:
             x = x[:, :Hp, :Wp, :]
-
-        return self.proj_drop(self.proj(x))
+        x = self.proj_drop(self.proj(x))
+        return x.permute(0, 3, 1, 2)
 
     def extra_repr(self) -> str:
         return (
@@ -108,7 +106,65 @@ class FeedForward(nn.Module):
         x = F.gelu(x1) * x2
         x = self.project_out(x)
         return x
+class Scale(nn.Module):
+    """
+    Scale vector by element multiplications.
+    """
 
+    def __init__(self, size, init_value=1.0, trainable=True):
+        super().__init__()
+        self.scale = nn.Parameter(init_value * torch.ones(size), requires_grad=trainable)
+
+    def forward(self, x):
+        return x * self.scale
+
+class StarReLU(nn.Module):
+    """
+    StarReLU: s * relu(x) ** 2 + b
+    """
+
+    def __init__(self, scale_value=1.0, bias_value=0.0,
+                 scale_learnable=True, bias_learnable=True, inplace=False):
+        super().__init__()
+        self.inplace = inplace
+        self.relu = nn.ReLU(inplace=inplace)
+        self.scale = nn.Parameter(scale_value * torch.ones(1),
+                                  requires_grad=scale_learnable)
+        self.bias = nn.Parameter(bias_value * torch.ones(1),
+                                 requires_grad=bias_learnable)
+
+    def forward(self, x):
+        return self.scale * self.relu(x) ** 2 + self.bias
+
+
+class SepConv(nn.Module):
+    r"""
+    Inverted separable convolution from MobileNetV2: https://arxiv.org/abs/1801.04381.
+    """
+
+    def __init__(self, dim, expansion_ratio=2,
+                 act1_layer=StarReLU, act2_layer=nn.Identity,
+                 bias=False, kernel_size=7, padding=3,
+                 **kwargs, ):
+        super().__init__()
+        med_channels = int(expansion_ratio * dim)
+        self.pwconv1 = nn.Linear(dim, med_channels, bias=bias)
+        self.act1 = act1_layer()
+        self.dwconv = nn.Conv2d(
+            med_channels, med_channels, kernel_size=kernel_size,
+            padding=padding, groups=med_channels, bias=bias)  # depthwise conv
+        self.act2 = act2_layer()
+        self.pwconv2 = nn.Linear(med_channels, dim, bias=bias)
+
+    def forward(self, x):
+        x = self.pwconv1(x)
+        x = self.act1(x)
+        x = x.permute(0, 3, 1, 2)
+        x = self.dwconv(x)
+        x = x.permute(0, 2, 3, 1)
+        x = self.act2(x)
+        x = self.pwconv2(x)
+        return x
 
 class EfficientMixAttnTransformerBlock(nn.Module):
     def __init__(
@@ -116,12 +172,13 @@ class EfficientMixAttnTransformerBlock(nn.Module):
             dim,
             input_resolution,
             mlp_ratio=4.0,
-            qkv_bias=True,
             drop=0.0,
             attn_drop=0.0,
             drop_path=0.0,
             norm_layer=nn.LayerNorm,
             res_scale=1.0,
+            x_scale_init_value=1.0,
+            is_NA=True,
     ):
         super().__init__()
         self.dim = dim
@@ -131,14 +188,14 @@ class EfficientMixAttnTransformerBlock(nn.Module):
         self.res_scale = res_scale
 
         self.attn = NAttention(
-            input_resolution[0],
-            channel=dim,
+            dim,
             kernel_size=7,
             dilation=2,
             num_heads=4,
             qk_scale=None,
             attn_drop=attn_drop,
             proj_drop=drop,
+        # ) if is_NA else SepConv(input_resolution[0])
         )
         self.norm1 = norm_layer(dim)
 
@@ -147,14 +204,18 @@ class EfficientMixAttnTransformerBlock(nn.Module):
         self.ffn = FeedForward(dim, 2.66, False)
 
         self.norm2 = norm_layer(dim)
+        self.x_scale1 = Scale(size=input_resolution[0], init_value=x_scale_init_value) \
+            if x_scale_init_value else nn.Identity()
+        self.x_scale2 = Scale(size=input_resolution[0], init_value=x_scale_init_value) \
+            if x_scale_init_value else nn.Identity()
 
     def forward(self, x):
         # Mixed attention
-        x = x + self.res_scale * self.drop_path(
+        x = self.x_scale1(x) + self.res_scale * self.drop_path(
             (self.attn(self.norm1(x)))
         )
         # FFN
-        x = x + self.res_scale * self.drop_path(self.ffn(self.norm2(x)))
+        x = self.x_scale2(x) + self.res_scale * self.drop_path(self.ffn(self.norm2(x)))
         return x
 
     def extra_repr(self) -> str:

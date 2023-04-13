@@ -35,7 +35,7 @@ datasets:
     ### -------------Progressive training--------------------------
     mini_batch_sizes: [ 1,1,1,1,1,1 ]             # Batch size per gpu
     iters: [ 92000,64000,48000,36000,36000,24000 ]
-    gt_size: 384   # Max patch size for progressive training
+    gt_size: 128   # Max patch size for progressive training
     gt_sizes: [ 128,128,128,128,128,128 ]  # Patch sizes for progressive training.
     ### ------------------------------------------------------------
 
@@ -60,8 +60,8 @@ network_g:
   in_chans: 6
   img_size: 128
   img_range: 1.
-  depths: [2, 2, 2, 8,2,2,2,2]
-  embed_dim: 48
+  depths: [2, 2, 6, 2,6,2,2,2]
+  embed_dim: 72
   mlp_ratio: 2
   #  upsampler: 'pixelshuffle'
   resi_connection: '1conv'
@@ -72,8 +72,8 @@ network_g:
 path:
   pretrain_network_g: ~
   strict_load_g: true
-  resume_state: /home/lab/code1/IR/experiments/train_MYIR_scratch/training_states/4000.state
-#  resume_state: ~
+#  resume_state: /home/lab/code1/IR/experiments/train_MYIR_scratch/training_states/4000.state
+  resume_state: ~
 
 # training settings
 train:
@@ -89,8 +89,7 @@ train:
 
   scheduler:
     type: CosineAnnealingRestartCyclicLR
-#    periods: [ 92000, 408000 ]
-    periods: [ 200, 408000 ]
+    periods: [ 920, 4080 ]
     restart_weights: [ 1,1 ]
     eta_mins: [ 0.0003,0.000003 ]
 

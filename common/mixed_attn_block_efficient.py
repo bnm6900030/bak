@@ -2,6 +2,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from einops import rearrange
 from natten.functional import natten2dav, natten2dqkrpb
 from torch.nn.functional import pad
 
@@ -79,7 +80,8 @@ class NAttention(nn.Module):
         if pad_r or pad_b:
             x = x[:, :Hp, :Wp, :]
         x = self.proj_drop(self.proj(x))
-        return x.permute(0, 3, 1, 2)
+        x= x.permute(0, 3, 1, 2)
+        return x
 
     def extra_repr(self) -> str:
         return (
@@ -157,14 +159,55 @@ class SepConv(nn.Module):
         self.pwconv2 = nn.Linear(med_channels, dim, bias=bias)
 
     def forward(self, x):
+        x = x.permute(0, 2, 3, 1) # bchw 2 bhwc
+
         x = self.pwconv1(x)
         x = self.act1(x)
-        x = x.permute(0, 3, 1, 2)
+        x = x.permute(0, 3, 1, 2) # bhwc 2 bchw
         x = self.dwconv(x)
-        x = x.permute(0, 2, 3, 1)
+        x = x.permute(0, 2, 3, 1) # bchw 2 bhwc
         x = self.act2(x)
         x = self.pwconv2(x)
+        x = x.permute(0, 3, 1, 2) # bhwc 2 bchw
         return x
+
+
+class Attention(nn.Module):
+    def __init__(self, dim, num_heads, bias):
+        super(Attention, self).__init__()
+        self.num_heads = num_heads
+        self.temperature = nn.Parameter(torch.ones(num_heads, 1, 1))
+
+        self.qkv = nn.Conv2d(dim, dim * 3, kernel_size=1, bias=bias)
+        self.qkv_dwconv = nn.Conv2d(dim * 3, dim * 3, kernel_size=3, stride=1, padding=1, groups=dim * 3, bias=bias)
+        self.project_out = nn.Conv2d(dim, dim, kernel_size=1, bias=bias)
+
+    def forward(self, x):
+        b, c, h, w = x.shape
+
+        qkv = self.qkv_dwconv(self.qkv(x))
+        q, k, v = qkv.chunk(3, dim=1)
+
+        q = rearrange(q, 'b (head c) h w -> b head c (h w)', head=self.num_heads).contiguous(
+            memory_format=torch.contiguous_format)
+        k = rearrange(k, 'b (head c) h w -> b head c (h w)', head=self.num_heads).contiguous(
+            memory_format=torch.contiguous_format)
+        v = rearrange(v, 'b (head c) h w -> b head c (h w)', head=self.num_heads).contiguous(
+            memory_format=torch.contiguous_format)
+
+        q = torch.nn.functional.normalize(q, dim=-1)
+        k = torch.nn.functional.normalize(k, dim=-1)
+
+        attn = (q @ k.transpose(-2, -1)) * self.temperature
+        attn = attn.softmax(dim=-1)
+
+        out = (attn @ v)
+
+        out = rearrange(out, 'b head c (h w) -> b (head c) h w', head=self.num_heads, h=h, w=w)
+
+        out = self.project_out(out)
+        return out
+
 
 class EfficientMixAttnTransformerBlock(nn.Module):
     def __init__(
@@ -178,7 +221,6 @@ class EfficientMixAttnTransformerBlock(nn.Module):
             norm_layer=nn.LayerNorm,
             res_scale=1.0,
             x_scale_init_value=1.0,
-            is_NA=True,
     ):
         super().__init__()
         self.dim = dim
@@ -187,15 +229,15 @@ class EfficientMixAttnTransformerBlock(nn.Module):
         self.mlp_ratio = mlp_ratio
         self.res_scale = res_scale
 
+        # self.attn = Attention(dim, 4, False)
         self.attn = NAttention(
-            dim,
+            input_resolution[0],
             kernel_size=7,
             dilation=2,
             num_heads=4,
             qk_scale=None,
             attn_drop=attn_drop,
             proj_drop=drop,
-        # ) if is_NA else SepConv(input_resolution[0])
         )
         self.norm1 = norm_layer(dim)
 

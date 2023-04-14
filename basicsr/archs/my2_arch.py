@@ -140,7 +140,6 @@ class TransformerStage(nn.Module):
             norm_layer=nn.LayerNorm,
             conv_type="1conv",
             init_method="",
-            is_NA=True,
 
     ):
         super().__init__()
@@ -154,7 +153,6 @@ class TransformerStage(nn.Module):
                 dim=dim,
                 input_resolution=input_resolution,
                 mlp_ratio=mlp_ratio,
-                is_NA=is_NA,
 
                 drop=drop,
                 attn_drop=attn_drop,
@@ -211,7 +209,7 @@ class MYIR2(nn.Module):
             self,
             img_size=128,
             in_chans=6,
-            embed_dim=64,
+            embed_dim=48,
             upscale=1,
             img_range=1.0,
             upsampler="",
@@ -250,7 +248,6 @@ class MYIR2(nn.Module):
             dim=embed_dim,
             input_resolution=self.input_resolution,
             depth=depths[0],
-            is_NA=False,
             mlp_ratio=mlp_ratio,
 
             drop=drop_rate,
@@ -268,7 +265,6 @@ class MYIR2(nn.Module):
             input_resolution=to_2tuple(int(img_size / 2)),
             depth=depths[1],
             mlp_ratio=mlp_ratio,
-            is_NA=False,
 
             drop=drop_rate,
             attn_drop=attn_drop_rate,
@@ -342,7 +338,6 @@ class MYIR2(nn.Module):
             norm_layer=norm_layer,
             conv_type=conv_type,
             init_method=init_method,
-            is_NA=False,
 
         )
 
@@ -355,7 +350,6 @@ class MYIR2(nn.Module):
             depth=depths[6],
             mlp_ratio=mlp_ratio,
             drop=drop_rate,
-            is_NA=False,
             attn_drop=attn_drop_rate,
             drop_path=dpr[sum(depths[:6]): sum(depths[: 6 + 1])],
             norm_layer=norm_layer,

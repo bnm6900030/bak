@@ -14,10 +14,10 @@ datasets:
 #    dataroot_gt: D:\code\BasicSR\datasets\DPDD\val
 #    dataroot_lqL: D:\code\BasicSR\datasets\DPDD\train\L
 #    dataroot_lqR: D:\code\BasicSR\datasets\DPDD\train\R
-    dataroot_gt: /home/lab/code1/MYIR/datasets/DPDD/val
-    dataroot_lqL: /home/lab/code1/MYIR/datasets/DPDD/train/L
-    dataroot_lqR: /home/lab/code1/MYIR/datasets/DPDD/train/R
-    dataroot_lqC: /home/lab/code1/MYIR/datasets/DPDD/train/C
+    dataroot_gt: /home/lab/code1/MYIR/datasets/DPDD1/val
+    dataroot_lqL: /home/lab/code1/MYIR/datasets/DPDD1/train/L
+    dataroot_lqR: /home/lab/code1/MYIR/datasets/DPDD1/train/R
+    dataroot_lqC: /home/lab/code1/MYIR/datasets/DPDD1/train/C
     filename_tmpl: '{}'
     io_backend:
       type: disk
@@ -33,17 +33,17 @@ datasets:
     ### -------------Progressive training--------------------------
     mini_batch_sizes: [ 1,1,1,1,1,1 ]             # Batch size per gpu
     iters: [ 92000,64000,48000,36000,36000,24000 ]
-    gt_size: 384   # Max patch size for progressive training
+    gt_size: 128   # Max patch size for progressive training
     gt_sizes: [ 128,128,128,128,128,128 ]  # Patch sizes for progressive training.
     ### ------------------------------------------------------------
 
   val:
     name: ValSet
     type: Dataset_DefocusDeblur_DualPixel_16bit
-    dataroot_gt: /home/lab/code1/MYIR/datasets/DPDD/val
-    dataroot_lqL: /home/lab/code1/MYIR/datasets/DPDD/train/L
-    dataroot_lqR: /home/lab/code1/MYIR/datasets/DPDD/train/R
-    dataroot_lqC: /home/lab/code1/MYIR/datasets/DPDD/train/C
+    dataroot_gt: /home/lab/code1/MYIR/datasets/DPDD1/val
+    dataroot_lqL: /home/lab/code1/MYIR/datasets/DPDD1/train/L
+    dataroot_lqR: /home/lab/code1/MYIR/datasets/DPDD1/train/R
+    dataroot_lqC: /home/lab/code1/MYIR/datasets/DPDD1/train/C
     io_backend:
       type: disk
 
@@ -52,28 +52,32 @@ network_g:
   type: MYIR
 #  upscale: 1
   in_chans: 6
-  img_size: 128
-  img_range: 1.
-  depths: [ 6, 6, 6, 6,  ]
   embed_dim: 48
-  num_heads: [ 6, 6, 6, 6,  ]
+#  num_heads: [0, 0, 0, 0, 3, 6, 12, 24]
+  num_heads: [0, 0, 0, 0, ]
+#  num_heads: [3, 6, 12, 24 ]
+#  depths: [3, 3, 9, 3, 2, 2, 6, 2]
+  depths: [3, 3, 9, 3,  ]
+#  depths: [2, 2, 6, 2 ]
+#  is_conv_list: [false,false,false,false]
+  is_conv_list: [true,true,true,true]
+  dilations: [
+#  [],
+#  [],
+#  [],
+#  [],
+  [1, 8],
+  [1, 4],
+  [1, 2, 1, 2, 1, 2],
+  [1, 1],
+  ]
   mlp_ratio: 2
-  #  upsampler: 'pixelshuffle'
-  resi_connection: '1conv'
-  in_channels: 6
-  upsampler: ""
-  window_size: 16
-  stripe_size:
-    - 16
-    - 32
-  stripe_groups:
-    - null
-    - null
-  anchor_window_down_factor: 4
+
 # path
 path:
   pretrain_network_g: ~
   strict_load_g: true
+#  resume_state: /home/lab/code1/IR/experiments/train_MYIR_scratch/training_states/4000.state
   resume_state: ~
 
 # training settings
@@ -106,6 +110,17 @@ train:
     type: L1Loss
     loss_weight: 1.0
     reduction: mean
+#  perceptual_opt:
+#    type: PerceptualLoss
+#    layer_weights:  {'relu2_2': 1.,
+#                     'relu1_2': 1.,
+#                     'relu3_3': 1.,
+#                     'relu4_3': 1.,
+#                     'relu5_4': 1.,
+#                                  }
+#    style_weight: 0.2
+#    perceptual_weight: 0.2
+
 
 # validation settings
 val:

@@ -154,77 +154,84 @@ class Dataset_DefocusDeblur_DualPixel_16bit(data.Dataset):
         if self.opt['phase'] == 'train':
             self.geometric_augs = self.opt['geometric_augs']
 
-        self.cache_data = {}
+        # self.cache_data = {}
 
     def __getitem__(self, index):
-        if self.cache_data.get(index):
-            return self.cache_data.get(index)
-        else:
-            if self.file_client is None:
-                self.file_client = FileClient(
-                    self.io_backend_opt.pop('type'), **self.io_backend_opt)
+        # if self.cache_data.get(index):
+        #     return self.cache_data.get(index)
+        # else:
+        if self.file_client is None:
+            self.file_client = FileClient(
+                self.io_backend_opt.pop('type'), **self.io_backend_opt)
 
-            scale = self.opt['scale']
-            index = index % len(self.paths)
-            # Load gt and lq images. Dimension order: HWC; channel order: BGR;
-            # image range: [0, 1], float32.
-            gt_path = self.paths[index]['gt_path']
-            img_bytes = self.file_client.get(gt_path, 'gt')
-            try:
-                img_gt = imfrombytesDP(img_bytes, float32=True)
-            except:
-                raise Exception("gt path {} not working".format(gt_path))
+        scale = self.opt['scale']
+        index = index % len(self.paths)
+        # Load gt and lq images. Dimension order: HWC; channel order: BGR;
+        # image range: [0, 1], float32.
+        gt_path = self.paths[index]['gt_path']
+        img_bytes = self.file_client.get(gt_path, 'gt')
+        try:
+            img_gt = imfrombytesDP(img_bytes, float32=True)
+        except:
+            raise Exception("gt path {} not working".format(gt_path))
 
-            lqL_path = self.paths[index]['lqL_path']
-            img_bytes = self.file_client.get(lqL_path, 'lqL')
-            try:
-                img_lqL = imfrombytesDP(img_bytes, float32=True)
-            except:
-                raise Exception("lqL path {} not working".format(lqL_path))
+        lqL_path = self.paths[index]['lqL_path']
+        img_bytes = self.file_client.get(lqL_path, 'lqL')
+        try:
+            img_lqL = imfrombytesDP(img_bytes, float32=True)
+        except:
+            raise Exception("lqL path {} not working".format(lqL_path))
 
-            lqR_path = self.paths[index]['lqR_path']
-            img_bytes = self.file_client.get(lqR_path, 'lqR')
-            try:
-                img_lqR = imfrombytesDP(img_bytes, float32=True)
-            except:
-                raise Exception("lqR path {} not working".format(lqR_path))
+        lqR_path = self.paths[index]['lqR_path']
+        img_bytes = self.file_client.get(lqR_path, 'lqR')
+        try:
+            img_lqR = imfrombytesDP(img_bytes, float32=True)
+        except:
+            raise Exception("lqR path {} not working".format(lqR_path))
 
 
-            # augmentation for training
-            if self.opt['phase'] == 'train':
-                gt_size = self.opt['gt_size']
-                # padding
-                img_lqL, img_lqR, img_gt = padding_DP(img_lqL, img_lqR, img_gt, gt_size)
+        # augmentation for training
+        if self.opt['phase'] == 'train':
+            gt_size = self.opt['gt_size']
+            # padding
+            img_lqL, img_lqR, img_gt = padding_DP(img_lqL, img_lqR, img_gt, gt_size)
 
-                # random crop
-                img_lqL, img_lqR, img_gt = paired_random_crop_DP(img_lqL, img_lqR, img_gt, gt_size, scale, gt_path)
+            # random crop
+            img_lqL, img_lqR, img_gt = paired_random_crop_DP(img_lqL, img_lqR, img_gt, gt_size, scale, gt_path)
 
-                # flip, rotation
-                if self.geometric_augs:
-                    img_lqL, img_lqR, img_gt = random_augmentation(img_lqL, img_lqR, img_gt)
-            # TODO: color space transform
-            # BGR to RGB, HWC to CHW, numpy to tensor
-            img_lqL, img_lqR, img_gt = img2tensor([img_lqL, img_lqR, img_gt],
-                                        bgr2rgb=True,
-                                        float32=True)
-            # normalize
-            if self.mean is not None or self.std is not None:
-                normalize(img_lqL, self.mean, self.std, inplace=True)
-                normalize(img_lqR, self.mean, self.std, inplace=True)
-                normalize(img_gt, self.mean, self.std, inplace=True)
+            # flip, rotation
+            if self.geometric_augs:
+                img_lqL, img_lqR, img_gt = random_augmentation(img_lqL, img_lqR, img_gt)
+        # TODO: color space transform
+        # BGR to RGB, HWC to CHW, numpy to tensor
+        img_lqL, img_lqR, img_gt = img2tensor([img_lqL, img_lqR, img_gt],
+                                    bgr2rgb=True,
+                                    float32=True)
+        # normalize
+        if self.mean is not None or self.std is not None:
+            normalize(img_lqL, self.mean, self.std, inplace=True)
+            normalize(img_lqR, self.mean, self.std, inplace=True)
+            normalize(img_gt, self.mean, self.std, inplace=True)
 
-            resize = transforms.Resize([128, 128], antialias=True)
-            img_lqL = resize(img_lqL)
-            img_lqR = resize(img_lqR)
-            img_gt = resize(img_gt)
-            img_lq = torch.cat([img_lqL, img_lqR], 0)
-            self.cache_data[index] = {
-                'lq': img_lq,
-                'gt': img_gt,
-                'lq_path': lqL_path,
-                'gt_path': gt_path
-            }
-            return self.cache_data[index]
+        # resize = transforms.Resize([256, 256], antialias=True)
+        # img_lqL = resize(img_lqL)
+        # img_lqR = resize(img_lqR)
+        # img_gt = resize(img_gt)
+        img_lq = torch.cat([img_lqL, img_lqR], 0)
+        # self.cache_data[index] = {
+        #     'lq': img_lq,
+        #     # 'lq': img_lqR,
+        #     'gt': img_gt,
+        #     'lq_path': lqL_path,
+        #     'gt_path': gt_path
+        # }
+        return {
+            'lq': img_lq,
+            # 'lq': img_lqR,
+            'gt': img_gt,
+            'lq_path': lqL_path,
+            'gt_path': gt_path
+        }
 
     def __len__(self):
         return len(self.paths)

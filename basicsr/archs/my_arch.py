@@ -261,7 +261,7 @@ class MYIR(nn.Module):
             drop_path_rate=0.2,
             norm_layer=nn.LayerNorm,
             patch_norm=False,
-            is_checkpoint=False,
+            is_checkpoint=True,
             **kwargs
     ):
         super().__init__()
@@ -366,7 +366,7 @@ if __name__ == '__main__':
     model.cuda()
     from torchsummary import summary
     from thop import profile
-    summary(model, (6, 128, 128))
-    flops, params = profile(model, inputs=(torch.randn(1,6,128,128).cuda(),))
-    print('FLOPs = ' + str(flops / 1000 ** 3) + 'G')
-    print('Params = ' + str(params / 1000 ** 2) + 'M')
+    summary(model, (6, 512, 512))
+    # flops, params = profile(model, inputs=(torch.randn(1,6,256,256).cuda(),))
+    # print('FLOPs = ' + str(flops / 1000 ** 3) + 'G')
+    # print('Params = ' + str(params / 1000 ** 2) + 'M')

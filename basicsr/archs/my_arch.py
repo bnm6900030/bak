@@ -307,7 +307,7 @@ class MYIR(nn.Module):
                 norm_layer=norm_layer,
                 downsample=PatchMerging,
             )
-            if is_checkpoint:
+            if is_checkpoint and i_layer %2 ==0:
                 layer = checkpoint_wrapper(layer)
             self.layers.append(layer)
 
@@ -346,6 +346,7 @@ class MYIR(nn.Module):
         return x
 
 
+
 if __name__ == '__main__':
     # model = MYIR(num_heads=[3, 6, 12, 24],
     #              embed_dim=96,
@@ -358,10 +359,10 @@ if __name__ == '__main__':
     #                  [1, 1],
     #              ]
     #              )
-    model = MYIR(num_heads=[0, 0, 0, 0],
-                 embed_dim=96,
-                 depths=[2, 2, 6, 2],
-                 is_conv_list=[True, True, True, True],
+    model = MYIR(num_heads=[3, 6, 12, 24],
+                 embed_dim=48,
+                 depths=[2, 2, 6, 2 ],
+                 is_conv_list=[False, False,False,False, ],
                  )
     model.cuda()
     from torchsummary import summary
@@ -370,3 +371,4 @@ if __name__ == '__main__':
     # flops, params = profile(model, inputs=(torch.randn(1,6,256,256).cuda(),))
     # print('FLOPs = ' + str(flops / 1000 ** 3) + 'G')
     # print('Params = ' + str(params / 1000 ** 2) + 'M')
+

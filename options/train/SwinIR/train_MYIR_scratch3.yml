@@ -17,9 +17,9 @@ datasets:
 #    dataroot_gt: /home/lab/code1/MYIR/datasets/DPDD1/val
 #    dataroot_lqL: /home/lab/code1/MYIR/datasets/DPDD1/train/L
 #    dataroot_lqR: /home/lab/code1/MYIR/datasets/DPDD1/train/R
-    dataroot_gt: /home/lab/code1/Restomer/Defocus_Deblurring/Datasets/train/DPDD/target_crops
-    dataroot_lqL: /home/lab/code1/Restomer/Defocus_Deblurring/Datasets/train/DPDD/inputL_crops
-    dataroot_lqR: /home/lab/code1/Restomer/Defocus_Deblurring/Datasets/train/DPDD/inputR_crops
+    dataroot_gt: /root/autodl-tmp/train/DPDD/target_crops
+    dataroot_lqL: /root/autodl-tmp/train/DPDD/inputL_crops
+    dataroot_lqR: /root/autodl-tmp/train/DPDD/inputR_crops
     filename_tmpl: '{}'
     io_backend:
       type: disk
@@ -46,9 +46,9 @@ datasets:
 #    dataroot_gt: /home/lab/code1/MYIR/datasets/DPDD1/val
 #    dataroot_lqL: /home/lab/code1/MYIR/datasets/DPDD1/train/L
 #    dataroot_lqR: /home/lab/code1/MYIR/datasets/DPDD1/train/R
-    dataroot_gt: /home/lab/code1/Restomer/Defocus_Deblurring/Datasets/val/DPDD/target_crops
-    dataroot_lqL: /home/lab/code1/Restomer/Defocus_Deblurring/Datasets/val/DPDD/inputL_crops
-    dataroot_lqR: /home/lab/code1/Restomer/Defocus_Deblurring/Datasets/val/DPDD/inputR_crops
+    dataroot_gt: /root/autodl-tmp/pycharm_project_983/datasets/val/DPDD/target_crops
+    dataroot_lqL: /root/autodl-tmp/pycharm_project_983/datasets/val/DPDD/inputL_crops
+    dataroot_lqR: /root/autodl-tmp/pycharm_project_983/datasets/val/DPDD/inputR_crops
     io_backend:
       type: disk
 
@@ -57,17 +57,17 @@ network_g:
   type: MYIR
 #  upscale: 1
   in_chans: 6
-  embed_dim: 64
+  embed_dim: 96
 #  num_heads: [0, 0, 0, 0, 3, 6, 12, 24]
-  num_heads: [0, 0, 0, 0, ]
+  num_heads: [3, 6, 12, 24 ]
 #  num_heads: [0, 0,  12, 24 ]
 #  num_heads: [3, 6, 12, 24 ]
 #  depths: [3, 3, 9, 3, 2, 2, 6, 2]
-  depths: [3, 3, 9, 3,  ]
+  depths: [2, 2, 6, 2 ]
 #  depths: [3, 3, 6, 2,  ]
 #  depths: [2, 2, 6, 2 ]
 #  is_conv_list: [false,false,false,false]
-  is_conv_list: [true,true,true,true,]
+  is_conv_list: [false,false,false,false]
   dilations: [
 #  [],
 #  [],
@@ -77,6 +77,7 @@ network_g:
   [1, 4],
   [1, 2, 1, 2, 1, 2],
   [1, 1],
+
   ]
   mlp_ratio: 2
 
@@ -84,8 +85,8 @@ network_g:
 path:
   pretrain_network_g: ~
   strict_load_g: true
-#  resume_state: /home/lab/code1/IR/experiments/train_MYIR_scratch/training_states/138000.state
-  resume_state: ~
+  resume_state: /root/autodl-tmp/pycharm_project_983/experiments/train_MYIR_scratch/training_states/138000.state
+#  resume_state: ~
 
 # training settings
 train:

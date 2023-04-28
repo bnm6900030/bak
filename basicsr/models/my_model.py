@@ -34,7 +34,7 @@ class MYModel(BaseModel):
         if self.is_train:
             self.init_training_settings()
 
-        self.flag = True
+        self.flag = 0
     def init_training_settings(self):
         self.net_g.train()
         train_opt = self.opt['train']
@@ -240,11 +240,11 @@ class MYModel(BaseModel):
                 # calculate metrics
                 for name, opt_ in self.opt['val']['metrics'].items():
                     self.metric_results[name] += calculate_metric(metric_data, opt_)
-                    if self.flag:
+                    if self.flag <20:
                         lq = val_data['lq'][:, -3:, :, :]
                         lq_img = tensor2img([lq])
                         print(calculate_metric({"img": lq_img, "img2": metric_data['img2']}, opt_))
-                        self.flag = False
+                        self.flag += 1
             if use_pbar:
                 pbar.update(1)
                 pbar.set_description(f'Test {img_name}')

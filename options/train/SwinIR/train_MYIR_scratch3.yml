@@ -57,7 +57,7 @@ network_g:
   type: MYIR
 #  upscale: 1
   in_chans: 6
-  embed_dim: 96
+  embed_dim: 48
 #  num_heads: [0, 0, 0, 0, 3, 6, 12, 24]
   num_heads: [3, 6, 12, 24 ]
 #  num_heads: [0, 0,  12, 24 ]

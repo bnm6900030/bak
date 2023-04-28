@@ -213,7 +213,7 @@ class Dataset_DefocusDeblur_DualPixel_16bit(data.Dataset):
             normalize(img_lqR, self.mean, self.std, inplace=True)
             normalize(img_gt, self.mean, self.std, inplace=True)
 
-        # resize = transforms.Resize([256, 256], antialias=True)
+        # resize = transforms.Resize([128, 128], antialias=True)
         # img_lqL = resize(img_lqL)
         # img_lqR = resize(img_lqR)
         # img_gt = resize(img_gt)

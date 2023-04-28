@@ -283,7 +283,7 @@ class MYIR(nn.Module):
             embed_dim=embed_dim,
             norm_layer=norm_layer if self.patch_norm else None,
         )
-
+        # self.patch_embed = checkpoint_wrapper(self.patch_embed)
         # stochastic depth
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]
 
@@ -307,8 +307,8 @@ class MYIR(nn.Module):
                 norm_layer=norm_layer,
                 downsample=PatchMerging,
             )
-            if is_checkpoint and i_layer %2 ==0:
-                layer = checkpoint_wrapper(layer)
+            # if is_checkpoint and i_layer %2 ==0:
+            layer = checkpoint_wrapper(layer)
             self.layers.append(layer)
 
         self.norm = nn.LayerNorm(embed_dim, eps=1e-6)
@@ -366,8 +366,11 @@ if __name__ == '__main__':
                  )
     model.cuda()
     from torchsummary import summary
-    from thop import profile
-    summary(model, (6, 512, 512))
+    import os
+    os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
+    os.environ["CUDA_VISIBLE_DEVICES"] = '0'
+    # from thop import profile
+    summary(model, (6, 1120,880))
     # flops, params = profile(model, inputs=(torch.randn(1,6,256,256).cuda(),))
     # print('FLOPs = ' + str(flops / 1000 ** 3) + 'G')
     # print('Params = ' + str(params / 1000 ** 2) + 'M')

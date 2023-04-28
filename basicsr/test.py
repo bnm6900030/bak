@@ -16,7 +16,7 @@ from glob import glob
 import lpips
 
 from basicsr.archs.my_arch import MYIR
-
+# os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
 def MAE(img1, img2):
     mae_0=mean_absolute_error(img1[:,:,0], img2[:,:,0],
@@ -46,7 +46,7 @@ def save_img(filepath, img):
     cv2.imwrite(filepath,cv2.cvtColor(img, cv2.COLOR_RGB2BGR))
 
 
-alex = lpips.LPIPS(net='alex').cuda()
+# alex = lpips.LPIPS(net='alex').cuda()
 
 parser = argparse.ArgumentParser(description='Dual Pixel Defocus Deblurring using Restormer')
 
@@ -56,7 +56,7 @@ parser.add_argument('--result_dir', default='/root/autodl-tmp/pycharm_project_98
                     help='Directory for results')
 parser.add_argument('--weights',
                     # default='/home/lab/code1/IR/experiments/train_MYIR_scratch/models/net_g_6.pth', type=str,
-                    default='/root/autodl-tmp/pycharm_project_983/experiments/train_MYIR_scratch/models/net_g_138000.pth', type=str,
+                    default='/root/autodl-tmp/pycharm_project_983/experiments/train_MYIR_scratch/models/net_g_144000.pth', type=str,
                     help='Path to weights')
 parser.add_argument('--save_images', default=True, help='Save denoised images in result directory')
 
@@ -85,7 +85,7 @@ checkpoint = torch.load(args.weights, map_location=lambda storage, loc: storage.
 model_restoration.load_state_dict(checkpoint['params'])
 
 print("===>Testing using weights: ", args.weights)
-model_restoration.cuda()
+# model_restoration.cuda()
 model_restoration = nn.DataParallel(model_restoration)
 model_restoration.eval()
 
@@ -119,26 +119,31 @@ with torch.no_grad():
         # patchL = torch.from_numpy(imgL).unsqueeze(0)
         # patchR = torch.from_numpy(imgR).unsqueeze(0)
         # input_ = torch.cat([patchL, patchR], 1)
+        # model_restoration = model_restoration.cuda(0)
         # restored = model_restoration(input_.cuda())
         # # restored = patchR.cuda()
         # restored = torch.clamp(restored, 0, 1)
-        # pips.append(alex(patchC, restored, normalize=True).item())
+        # # pips.append(alex(patchC, restored, normalize=True).item())
 
         imgL = np.float32(load_img16(fileL)) / 65535.
         imgR = np.float32(load_img16(fileR)) / 65535.
         imgC = np.float32(load_img16(fileC)) / 65535.
-        patchC = torch.from_numpy(imgC).unsqueeze(0).permute(0, 3, 1, 2)
+        patchC = torch.from_numpy(imgC).unsqueeze(0).permute(0, 3, 1, 2).to('cuda')
         patchL = torch.from_numpy(imgL).unsqueeze(0).permute(0, 3, 1, 2)
         patchR = torch.from_numpy(imgR).unsqueeze(0).permute(0, 3, 1, 2)
         input_ = torch.cat([patchL, patchR], 1)
-        restored = imgR
-        # restored = model_restoration(input_)
+        # restored = imgR
+        input_1 = torch.clone(input_[:, :, :, :input_.shape[3] // 2])
+        input_2 = torch.clone(input_[:, :, :, input_.shape[3] // 2:])
+        input_1 = model_restoration(input_1.cuda(0))
+        input_2 = model_restoration(input_2.cuda(0))
+        restored=torch.cat([input_1, input_2], 3)
         restored = torch.clamp(restored, 0, 1)
-        pips.append(alex(patchC, restored, normalize=True).item())
+        # pips.append(alex(patchC, restored, normalize=True).item())
 
 
         restored = restored.cpu().detach().permute(0, 2, 3, 1).squeeze(0).numpy()
-        imgC = torch.from_numpy(imgC).permute(1,2,0).numpy()
+        # imgC = torch.from_numpy(imgC).permute(1,2,0).numpy()
         psnr.append(PSNR(imgC, restored))
         mae.append(MAE(imgC, restored))
         ssim.append(SSIM(imgC, restored))
@@ -178,3 +183,7 @@ print("Outdoor: PSNR {:4f} SSIM {:4f} MAE {:4f} LPIPS {:4f}".format(np.mean(psnr
 # Overall: PSNR 25.444740 SSIM 0.783585 MAE 0.040402 LPIPS 0.783585
 # Indoor:  PSNR 28.132499 SSIM 0.859354 MAE 0.026925 LPIPS 0.026925
 # Outdoor: PSNR 22.894816 SSIM 0.711701 MAE 0.053187 LPIPS 0.026925
+
+# Overall: PSNR 25.784986 SSIM 0.795623 MAE 0.038267 LPIPS 0.795623
+# Indoor:  PSNR 28.568919 SSIM 0.867271 MAE 0.024923 LPIPS 0.024923
+# Outdoor: PSNR 23.143819 SSIM 0.727649 MAE 0.050927 LPIPS 0.024923

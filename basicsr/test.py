@@ -55,7 +55,7 @@ parser.add_argument('--input_dir', default='/root/autodl-tmp/test/', type=str, h
 parser.add_argument('--result_dir', default='/root/autodl-tmp/pycharm_project_983/results/Dual_Pixel_Defocus_Deblurring/', type=str,
                     help='Directory for results')
 parser.add_argument('--weights',
-                    # default='/home/lab/code1/IR/experiments/train_MYIR_scratch/models/net_g_160000.pth', type=str,
+                    # default='/home/lab/code1/IR/experiments/train_MYIR_scratch/models/net_g_6.pth', type=str,
                     default='/root/autodl-tmp/pycharm_project_983/experiments/train_MYIR_scratch/models/net_g_138000.pth', type=str,
                     help='Path to weights')
 parser.add_argument('--save_images', default=True, help='Save denoised images in result directory')
@@ -81,6 +81,7 @@ model_restoration = MYIR(**x['network_g'])
 device_id = torch.cuda.current_device()
 
 checkpoint = torch.load(args.weights, map_location=lambda storage, loc: storage.cuda(device_id))
+# checkpoint = torch.load(args.weights,)
 model_restoration.load_state_dict(checkpoint['params'])
 
 print("===>Testing using weights: ", args.weights)
@@ -126,12 +127,12 @@ with torch.no_grad():
         imgL = np.float32(load_img16(fileL)) / 65535.
         imgR = np.float32(load_img16(fileR)) / 65535.
         imgC = np.float32(load_img16(fileC)) / 65535.
-        patchC = torch.from_numpy(imgC).unsqueeze(0).permute(0, 3, 1, 2).cuda()
+        patchC = torch.from_numpy(imgC).unsqueeze(0).permute(0, 3, 1, 2)
         patchL = torch.from_numpy(imgL).unsqueeze(0).permute(0, 3, 1, 2)
         patchR = torch.from_numpy(imgR).unsqueeze(0).permute(0, 3, 1, 2)
         input_ = torch.cat([patchL, patchR], 1)
-        # restored = imgR
-        restored = model_restoration(input_)
+        restored = imgR
+        # restored = model_restoration(input_)
         restored = torch.clamp(restored, 0, 1)
         pips.append(alex(patchC, restored, normalize=True).item())
 
@@ -170,7 +171,7 @@ print("Outdoor: PSNR {:4f} SSIM {:4f} MAE {:4f} LPIPS {:4f}".format(np.mean(psnr
 # Indoor:  PSNR 30.421379 SSIM 0.924711 MAE 0.021649 LPIPS 0.021649
 # Outdoor: PSNR 24.759205 SSIM 0.804724 MAE 0.044192 LPIPS 0.021649
 
-# Overall: PSNR 25.979450 SSIM 0.807825 MAE 0.039890 LPIPS 0.807825
+# Overall: PSNR 26.879450 SSIM 0.807825 MAE 0.039890 LPIPS 0.807825
 # Indoor:  PSNR 28.717393 SSIM 0.885318 MAE 0.028145 LPIPS 0.028145
 # Outdoor: PSNR 23.381916 SSIM 0.734307 MAE 0.051032 LPIPS 0.028145
 

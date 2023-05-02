@@ -1,520 +1,305 @@
-import math
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
+import torch.nn.functional as Func
+import collections
 from basicsr.utils.registry import ARCH_REGISTRY
-from basicsr.archs.nn import (
-    checkpoint,
-    conv_nd,
-    avg_pool_nd,
-    zero_module,
-    normalization,
-)
+from fairscale.nn import checkpoint_wrapper
+
+# from basicsr.archs.util import DPD
 
 
-def convert_module_to_f16(l):
-    """
-    Convert primitive modules to float16.
-    """
-    if isinstance(l, (nn.Conv1d, nn.Conv2d, nn.Conv3d)):
-        l.weight.data = l.weight.data.half()
-        if l.bias is not None:
-            l.bias.data = l.bias.data.half()
+def conv(in_channels, out_channels, kernel_size=3, stride=1, dilation=1, bias=True, act='LeakyReLU'):
+    if act is not None:
+        if act == 'LeakyReLU':
+            act_ = nn.LeakyReLU(0.1, inplace=True)
+        elif act == 'Sigmoid':
+            act_ = nn.Sigmoid()
+        elif act == 'Tanh':
+            act_ = nn.Tanh()
+
+        return nn.Sequential(
+            nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, dilation=dilation,
+                      padding=((kernel_size - 1) // 2) * dilation, bias=bias),
+            act_
+        )
+    else:
+        return nn.Conv2d(in_channels, out_channels, kernel_size=kernel_size, stride=stride, dilation=dilation,
+                         padding=((kernel_size - 1) // 2) * dilation, bias=bias)
 
 
-def convert_module_to_f32(l):
-    """
-    Convert primitive modules to float32, undoing convert_module_to_f16().
-    """
-    if isinstance(l, (nn.Conv1d, nn.Conv2d, nn.Conv3d)):
-        l.weight.data = l.weight.data.float()
-        if l.bias is not None:
-            l.bias.data = l.bias.data.float()
+def upconv(in_channels, out_channels):
+    return nn.Sequential(
+        nn.ConvTranspose2d(in_channels, out_channels, kernel_size=4, stride=2, padding=1, bias=True),
+        nn.LeakyReLU(0.1, inplace=True)
+    )
 
 
-class QKVAttentionLegacy(nn.Module):
-    """
-    A module which performs QKV attention. Matches legacy QKVAttention + input/ouput heads shaping
-    """
-
-    def __init__(self, n_heads):
-        super().__init__()
-        self.n_heads = n_heads
-
-    def forward(self, qkv):
-        """
-        Apply QKV attention.
-
-        :param qkv: an [N x (H * 3 * C) x T] tensor of Qs, Ks, and Vs.
-        :return: an [N x (H * C) x T] tensor after attention.
-        """
-        bs, width, length = qkv.shape
-        assert width % (3 * self.n_heads) == 0
-        ch = width // (3 * self.n_heads)
-        q, k, v = qkv.reshape(bs * self.n_heads, ch * 3, length).split(ch, dim=1)
-        scale = 1 / math.sqrt(math.sqrt(ch))
-        weight = torch.einsum(
-            "bct,bcs->bts", q * scale, k * scale
-        )  # More stable with f16 than dividing afterwards
-        weight = torch.softmax(weight.float(), dim=-1).type(weight.dtype)
-        a = torch.einsum("bts,bcs->bct", weight, v)
-        return a.reshape(bs, -1, length)
+def resnet_block(in_channels, kernel_size=3, dilation=[1, 1], bias=True, res_num=1):
+    return ResnetBlock(in_channels, kernel_size, dilation, bias=bias, res_num=res_num)
 
 
-class QKVAttention(nn.Module):
-    """
-    A module which performs QKV attention and splits in a different order.
-    """
+class ResnetBlock(nn.Module):
+    def __init__(self, in_channels, kernel_size, dilation, bias, res_num):
+        super(ResnetBlock, self).__init__()
 
-    def __init__(self, n_heads):
-        super().__init__()
-        self.n_heads = n_heads
-
-    def forward(self, qkv):
-        """
-        Apply QKV attention.
-
-        :param qkv: an [N x (3 * H * C) x T] tensor of Qs, Ks, and Vs.
-        :return: an [N x (H * C) x T] tensor after attention.
-        """
-        bs, width, length = qkv.shape
-        assert width % (3 * self.n_heads) == 0
-        ch = width // (3 * self.n_heads)
-        q, k, v = qkv.chunk(3, dim=1)
-        scale = 1 / math.sqrt(math.sqrt(ch))
-        weight = torch.einsum(
-            "bct,bcs->bts",
-            (q * scale).view(bs * self.n_heads, ch, length),
-            (k * scale).view(bs * self.n_heads, ch, length),
-        )  # More stable with f16 than dividing afterwards
-        weight = torch.softmax(weight.float(), dim=-1).type(weight.dtype)
-        a = torch.einsum("bts,bcs->bct", weight, v.reshape(bs * self.n_heads, ch, length))
-        return a.reshape(bs, -1, length)
-
-
-class AttentionBlock(nn.Module):
-    """
-    An attention block that allows spatial positions to attend to each other.
-
-    Originally ported from here, but adapted to the N-d case.
-    https://github.com/hojonathanho/diffusion/blob/1e0dceb3b3495bbe19116a5e1b3596cd0706c543/diffusion_tf/models/unet.py#L66.
-    """
-
-    def __init__(
-            self,
-            channels,
-            num_heads=1,
-            num_head_channels=-1,
-            use_checkpoint=False,
-            use_new_attention_order=False,
-    ):
-        super().__init__()
-        self.channels = channels
-        if num_head_channels == -1:
-            self.num_heads = num_heads
-        else:
-            assert (
-                    channels % num_head_channels == 0
-            ), f"q,k,v channels {channels} is not divisible by num_head_channels {num_head_channels}"
-            self.num_heads = channels // num_head_channels
-        self.use_checkpoint = use_checkpoint
-        self.norm = normalization(channels)
-        self.qkv = conv_nd(1, channels, channels * 3, 1)
-        if use_new_attention_order:
-            # split qkv before split heads
-            self.attention = QKVAttention(self.num_heads)
-        else:
-            # split heads before split qkv
-            self.attention = QKVAttentionLegacy(self.num_heads)
-
-        self.proj_out = zero_module(conv_nd(1, channels, channels, 1))
+        self.res_num = res_num
+        self.stem = nn.ModuleList([
+            nn.Sequential(
+                nn.Conv2d(in_channels, in_channels, kernel_size=kernel_size, stride=1, dilation=dilation[0],
+                          padding=((kernel_size - 1) // 2) * dilation[0], bias=bias),
+                nn.LeakyReLU(0.1, inplace=True),
+                nn.Conv2d(in_channels, in_channels, kernel_size=kernel_size, stride=1, dilation=dilation[1],
+                          padding=((kernel_size - 1) // 2) * dilation[1], bias=bias),
+            ) for _ in range(res_num)
+        ])
 
     def forward(self, x):
-        return checkpoint(self._forward, (x,), self.parameters(), True)
 
-    def _forward(self, x):
-        b, c, *spatial = x.shape
-        x = x.reshape(b, c, -1)
-        qkv = self.qkv(self.norm(x))
-        h = self.attention(qkv)
-        h = self.proj_out(h)
-        return (x + h).reshape(b, c, *spatial)
+        if self.res_num > 1:
+            temp = x
 
+        for i in range(self.res_num):
+            xx = self.stem[i](x)
+            x = x + xx
+            x = Func.leaky_relu(x, 0.1, inplace=True)
 
-class Upsample(nn.Module):
-    """
-    An upsampling layer with an optional convolution.
+        if self.res_num > 1:
+            x = x + temp
 
-    :param channels: channels in the inputs and outputs.
-    :param use_conv: a bool determining if a convolution is applied.
-    :param dims: determines if the signal is 1D, 2D, or 3D. If 3D, then
-                 upsampling occurs in the inner-two dimensions.
-    """
-
-    def __init__(self, channels, use_conv, dims=2, out_channels=None):
-        super().__init__()
-        self.channels = channels
-        self.out_channels = out_channels or channels
-        self.use_conv = use_conv
-        self.dims = dims
-        if use_conv:
-            self.conv = conv_nd(dims, self.channels, self.out_channels, 3, padding=1)
-
-    def forward(self, x):
-        assert x.shape[1] == self.channels
-        if self.dims == 3:
-            x = F.interpolate(
-                x, (x.shape[2], x.shape[3] * 2, x.shape[4] * 2), mode="nearest"
-            )
-        else:
-            x = F.interpolate(x, scale_factor=2, mode="nearest")
-        if self.use_conv:
-            x = self.conv(x)
         return x
 
 
-class Downsample(nn.Module):
-    """
-    A downsampling layer with an optional convolution.
+def IAC(feat_in, F, N, c, k, is_act_last=True):
+    Fs = torch.split(F[:, :N * (c * k * 2), :, :], c * k * 2, dim=1)
+    F_bs = torch.split(F[:, N * (c * k * 2):, :, :], c, dim=1)
+    for i in range(N):
+        F1, _ = torch.split(Fs[i], c * k, dim=1)
+        f = SAC(feat_in=feat_in if i == 0 else f, kernel1=F1, ksize=k)  ## image
+        f = f + F_bs[i]
 
-    :param channels: channels in the inputs and outputs.
-    :param use_conv: a bool determining if a convolution is applied.
-    :param dims: determines if the signal is 1D, 2D, or 3D. If 3D, then
-                 downsampling occurs in the inner-two dimensions.
-    """
+        if i < (N - 1):
+            f = Func.leaky_relu(f, 0.1, inplace=True)
+        elif is_act_last:
+            f = Func.leaky_relu(f, 0.1, inplace=True)
 
-    def __init__(self, channels, use_conv, dims=2, out_channels=None):
-        super().__init__()
-        self.channels = channels
-        self.out_channels = out_channels or channels
-        self.use_conv = use_conv
-        self.dims = dims
-        stride = 2 if dims != 3 else (1, 2, 2)
-        if use_conv:
-            self.op = conv_nd(
-                dims, self.channels, self.out_channels, 3, stride=stride, padding=1
-            )
-        else:
-            assert self.channels == self.out_channels
-            self.op = avg_pool_nd(dims, kernel_size=stride, stride=stride)
-
-    def forward(self, x):
-        assert x.shape[1] == self.channels
-        return self.op(x)
+    return f
 
 
-class ResBlock(nn.Module):
-    """
-    A residual block that can optionally change the number of channels.
+def SAC(feat_in, kernel1, ksize):
+    channels = feat_in.size(1)
+    N, kernels, H, W = kernel1.size()
+    pad = (ksize - 1) // 2
 
-    :param channels: the number of input channels.
-    :param emb_channels: the number of timestep embedding channels.
-    :param dropout: the rate of dropout.
-    :param out_channels: if specified, the number of out channels.
-    :param use_conv: if True and out_channels is specified, use a spatial
-        convolution instead of a smaller 1x1 convolution to change the
-        channels in the skip connection.
-    :param dims: determines if the signal is 1D, 2D, or 3D.
-    :param use_checkpoint: if True, use gradient checkpointing on this module.
-    :param up: if True, use this block for upsampling.
-    :param down: if True, use this block for downsampling.
-    """
+    feat_in = Func.pad(feat_in, (0, 0, pad, pad), mode="replicate")
+    feat_in = feat_in.unfold(2, ksize, 1)
+    feat_in = feat_in.permute(0, 2, 3, 1, 4).view(N, H, W, channels, -1)
 
-    def __init__(
-            self,
-            channels,
-            dropout,
-            out_channels=None,
-            use_conv=False,
-            dims=2,
-            use_checkpoint=False,
-            up=False,
-            down=False,
-    ):
-        super().__init__()
-        self.channels = channels
-        self.dropout = dropout
-        self.out_channels = out_channels or channels
-        self.use_conv = use_conv
-        self.use_checkpoint = use_checkpoint
+    kernel1 = kernel1.permute(0, 2, 3, 1).view(N, H, W, channels, ksize)
+    feat_in = torch.sum(torch.mul(feat_in, kernel1), -1)
+    feat_in = feat_in.permute(0, 3, 1, 2)
 
-        self.in_layers = nn.Sequential(
-            normalization(channels),
-            nn.SiLU(),
-            conv_nd(dims, channels, self.out_channels, 3, padding=1),
-        )
+    feat_in = Func.pad(feat_in, (pad, pad, 0, 0), mode="replicate")
+    feat_in = feat_in.unfold(3, ksize, 1)
+    feat_in = feat_in.permute(0, 2, 3, 1, 4).view(N, H, W, channels, -1)
+    # kernel2 = kernel2.permute(0, 2, 3, 1).view(N, H, W, channels, ksize)
+    feat_in = torch.sum(torch.mul(feat_in, kernel1), -1)
+    feat_out = feat_in.permute(0, 3, 1, 2)
 
-        self.updown = up or down
-
-        if up:
-            self.h_upd = Upsample(channels, False, dims)
-            self.x_upd = Upsample(channels, False, dims)
-        elif down:
-            self.h_upd = Downsample(channels, False, dims)
-            self.x_upd = Downsample(channels, False, dims)
-        else:
-            self.h_upd = self.x_upd = nn.Identity()
-
-        self.out_layers = nn.Sequential(
-            normalization(self.out_channels),
-            nn.SiLU(),
-            nn.Dropout(p=dropout),
-            zero_module(
-                conv_nd(dims, self.out_channels, self.out_channels, 3, padding=1)
-            ),
-        )
-
-        if self.out_channels == channels:
-            self.skip_connection = nn.Identity()
-        elif use_conv:
-            self.skip_connection = conv_nd(
-                dims, channels, self.out_channels, 3, padding=1
-            )
-        else:
-            self.skip_connection = conv_nd(dims, channels, self.out_channels, 1)
-
-    def forward(self, x):
-        """
-        Apply the block to a Tensor, conditioned on a timestep embedding.
-
-        :param x: an [N x C x ...] Tensor of features.
-        :param emb: an [N x emb_channels] Tensor of timestep embeddings.
-        :return: an [N x C x ...] Tensor of outputs.
-        """
-        return checkpoint(
-            self._forward, (x,), self.parameters(), self.use_checkpoint
-        )
-
-    def _forward(self, x):
-        if self.updown:
-            in_rest, in_conv = self.in_layers[:-1], self.in_layers[-1]
-            h = in_rest(x)
-            h = self.h_upd(h)
-            x = self.x_upd(x)
-            h = in_conv(h)
-        else:
-            h = self.in_layers(x)
-
-        h = self.out_layers(h)
-        return self.skip_connection(x) + h
+    return feat_out
 
 
 @ARCH_REGISTRY.register()
 class MYIR2(nn.Module):
+    def __init__(self, ch=32, ks=3, Fs=3, res_num=2, N=17, wiF=1.5, ):
+        super(MYIR2, self).__init__()
+        self.device = 'cuda'
+        ks = ks
+        self.Fs = Fs
+        res_num = res_num
 
-    def __init__(
-            self,
-            in_channels=6,
-            model_channels=192,
-            out_channels=3,
-            num_res_blocks=2,
-            attention_resolutions=(32,16,8),
-            dropout=0,
-            channel_mult=(1, 2, 4, 8),
-            conv_resample=True,
-            dims=2,
-            use_checkpoint=True,
-            use_fp16=False,
-            num_heads=4,
-            num_head_channels=-1,
-            num_heads_upsample=-1,
-            resblock_updown=True,
-            use_new_attention_order=False,
-    ):
-        super().__init__()
+        ch1 = ch
+        ch2 = ch1 * 2
+        ch3 = ch1 * 4
+        ch4 = ch1 * 4
+        self.ch4 = ch4
 
-        if num_heads_upsample == -1:
-            num_heads_upsample = num_heads
+        # weight init for filter predictor
+        self.wiF = wiF
 
-        self.in_channels = in_channels
-        self.model_channels = model_channels
-        self.out_channels = out_channels
-        self.num_res_blocks = num_res_blocks
-        self.attention_resolutions = attention_resolutions
-        self.dropout = dropout
-        self.channel_mult = channel_mult
-        self.conv_resample = conv_resample
-        self.use_checkpoint = use_checkpoint
-        self.dtype = torch.float16 if use_fp16 else torch.float32
-        self.num_heads = num_heads
-        self.num_head_channels = num_head_channels
-        self.num_heads_upsample = num_heads_upsample
+        ###################################
+        # Feature Extractor - Reconstructor
+        ###################################
+        # feature extractor
+        self.conv1_1 = conv(3, ch1, kernel_size=ks, stride=1)
+        self.conv1_2 = conv(ch1, ch1, kernel_size=ks, stride=1)
+        self.conv1_3 = conv(ch1, ch1, kernel_size=ks, stride=1)
 
-        ch = input_ch = int(channel_mult[0] * model_channels)
-        self.input_blocks = nn.ModuleList(
-            [nn.Sequential(conv_nd(dims, in_channels, ch, 3, padding=1))]
-        )
-        self._feature_size = ch
-        input_block_chans = [ch]
-        ds = 1
-        for level, mult in enumerate(channel_mult):
-            for _ in range(num_res_blocks):
-                layers = [
-                    ResBlock(
-                        ch,
-                        dropout,
-                        out_channels=int(mult * model_channels),
-                        dims=dims,
-                        use_checkpoint=use_checkpoint,
-                    )
-                ]
-                ch = int(mult * model_channels)
-                if ds in attention_resolutions:
-                    layers.append(
-                        AttentionBlock(
-                            ch,
-                            use_checkpoint=use_checkpoint,
-                            num_heads=num_heads,
-                            num_head_channels=num_head_channels,
-                            use_new_attention_order=use_new_attention_order,
-                        )
-                    )
-                self.input_blocks.append(nn.Sequential(*layers))
-                self._feature_size += ch
-                input_block_chans.append(ch)
-            if level != len(channel_mult) - 1:
-                out_ch = ch
-                self.input_blocks.append(
-                    nn.Sequential(
-                        ResBlock(
-                            ch,
-                            dropout,
-                            out_channels=out_ch,
-                            dims=dims,
-                            use_checkpoint=use_checkpoint,
-                            down=True,
-                        )
-                        if resblock_updown
-                        else Downsample(
-                            ch, conv_resample, dims=dims, out_channels=out_ch
-                        )
-                    )
-                )
-                ch = out_ch
-                input_block_chans.append(ch)
-                ds *= 2
-                self._feature_size += ch
+        self.conv2_1 = conv(ch1, ch2, kernel_size=ks, stride=2)
+        self.conv2_2 = conv(ch2, ch2, kernel_size=ks, stride=1)
+        self.conv2_3 = conv(ch2, ch2, kernel_size=ks, stride=1)
 
-        self.middle_block = nn.Sequential(
-            ResBlock(
-                ch,
-                dropout,
-                dims=dims,
-                use_checkpoint=use_checkpoint,
-            ),
-            AttentionBlock(
-                ch,
-                use_checkpoint=use_checkpoint,
-                num_heads=num_heads,
-                num_head_channels=num_head_channels,
-                use_new_attention_order=use_new_attention_order,
-            ),
-            ResBlock(
-                ch,
-                dropout,
-                dims=dims,
-                use_checkpoint=use_checkpoint,
-            ),
-        )
-        self._feature_size += ch
+        self.conv3_1 = conv(ch2, ch3, kernel_size=ks, stride=2)
+        self.conv3_2 = conv(ch3, ch3, kernel_size=ks, stride=1)
+        self.conv3_3 = conv(ch3, ch3, kernel_size=ks, stride=1)
 
-        self.output_blocks = nn.ModuleList([])
-        for level, mult in list(enumerate(channel_mult))[::-1]:
-            for i in range(num_res_blocks + 1):
-                ich = input_block_chans.pop()
-                layers = [
-                    ResBlock(
-                        ch + ich,
-                        dropout,
-                        out_channels=int(model_channels * mult),
-                        dims=dims,
-                        use_checkpoint=use_checkpoint,
-                    )
-                ]
-                ch = int(model_channels * mult)
-                if ds in attention_resolutions:
-                    layers.append(
-                        AttentionBlock(
-                            ch,
-                            use_checkpoint=use_checkpoint,
-                            num_heads=num_heads_upsample,
-                            num_head_channels=num_head_channels,
-                            use_new_attention_order=use_new_attention_order,
-                        )
-                    )
-                if level and i == num_res_blocks:
-                    out_ch = ch
-                    layers.append(
-                        ResBlock(
-                            ch,
-                            dropout,
-                            out_channels=out_ch,
-                            dims=dims,
-                            use_checkpoint=use_checkpoint,
-                            up=True,
-                        )
-                        if resblock_updown
-                        else Upsample(ch, conv_resample, dims=dims, out_channels=out_ch)
-                    )
-                    ds //= 2
-                self.output_blocks.append(nn.Sequential(*layers))
-                self._feature_size += ch
+        self.conv4_1 = conv(ch3, ch4, kernel_size=ks, stride=2)
+        self.conv4_2 = conv(ch4, ch4, kernel_size=ks, stride=1)
+        self.conv4_3 = conv(ch4, ch4, kernel_size=ks, stride=1)
 
-        self.out = nn.Sequential(
-            normalization(ch),
-            nn.SiLU(),
-            zero_module(conv_nd(dims, input_ch, out_channels, 3, padding=1)),
-        )
+        self.conv4_4 = nn.Sequential(
+            conv(2 * ch4, ch4, kernel_size=ks),
+            resnet_block(ch4, kernel_size=ks, res_num=res_num),
+            resnet_block(ch4, kernel_size=ks, res_num=res_num),
+            conv(ch4, ch4, kernel_size=ks))
+        # reconstructor
+        self.conv_res = nn.Sequential(
+            conv(ch4, ch4, kernel_size=ks),
+            resnet_block(ch4, kernel_size=ks, res_num=3),
+            conv(ch4, ch4, kernel_size=ks))
 
-    def convert_to_fp16(self):
-        """
-        Convert the torso of the model to float16.
-        """
-        self.input_blocks.apply(convert_module_to_f16)
-        self.middle_block.apply(convert_module_to_f16)
-        self.output_blocks.apply(convert_module_to_f16)
+        self.upconv3_u = upconv(ch4, ch3)
+        self.upconv3_1 = resnet_block(ch3, kernel_size=ks, res_num=1)
+        self.upconv3_2 = resnet_block(ch3, kernel_size=ks, res_num=1)
 
-    def convert_to_fp32(self):
-        """
-        Convert the torso of the model to float32.
-        """
-        self.input_blocks.apply(convert_module_to_f32)
-        self.middle_block.apply(convert_module_to_f32)
-        self.output_blocks.apply(convert_module_to_f32)
+        self.upconv2_u = upconv(ch3, ch2)
+        self.upconv2_1 = resnet_block(ch2, kernel_size=ks, res_num=1)
+        self.upconv2_2 = resnet_block(ch2, kernel_size=ks, res_num=1)
 
-    def forward(self, x):
-        """
-        Apply the model to an input batch.
+        self.upconv1_u = upconv(ch2, ch1)
+        self.upconv1_1 = resnet_block(ch1, kernel_size=ks, res_num=1)
+        self.upconv1_2 = resnet_block(ch1, kernel_size=ks, res_num=1)
 
-        :param x: an [N x C x ...] Tensor of inputs.
-        :param timesteps: a 1-D batch of timesteps.
-        :param y: an [N] Tensor of labels, if class-conditional.
-        :return: an [N x C x ...] Tensor of outputs.
-        """
-        single = torch.clone(x[:, -3:, :, :])
-        hs = []
-        h = x.type(self.dtype)
-        for module in self.input_blocks:
-            h = module(h)
-            hs.append(h)
-        h = self.middle_block(h)
-        for module in self.output_blocks:
-            h = torch.cat([h, hs.pop()], dim=1)
-            h = module(h)
-        h = h.type(x.dtype)
-        return self.out(h)+ single
+        self.out_res = conv(ch1, 3, kernel_size=ks)
+        ###################################
+
+        ###################################
+        # IFAN
+        ###################################
+        # filter encoder
+        self.kconv1_1 = conv(6, ch1, kernel_size=ks, stride=1)
+        self.kconv1_2 = conv(ch1, ch1, kernel_size=ks, stride=1)
+        self.kconv1_3 = conv(ch1, ch1, kernel_size=ks, stride=1)
+
+        self.kconv2_1 = conv(ch1, ch2, kernel_size=ks, stride=2)
+        self.kconv2_2 = conv(ch2, ch2, kernel_size=ks, stride=1)
+        self.kconv2_3 = conv(ch2, ch2, kernel_size=ks, stride=1)
+
+        self.kconv3_1 = conv(ch2, ch3, kernel_size=ks, stride=2)
+        self.kconv3_2 = conv(ch3, ch3, kernel_size=ks, stride=1)
+        self.kconv3_3 = conv(ch3, ch3, kernel_size=ks, stride=1)
+
+        self.kconv4_1 = conv(ch3, ch4, kernel_size=ks, stride=2)
+        self.kconv4_2 = conv(ch4, ch4, kernel_size=ks, stride=1)
+        self.kconv4_3 = conv(ch4, ch4, kernel_size=ks, stride=1)
+
+        # disparity map estimator
+        self.DME = nn.Sequential(
+            conv(ch4, ch4, kernel_size=ks),
+            resnet_block(ch4, kernel_size=ks, res_num=res_num),
+            resnet_block(ch4, kernel_size=ks, res_num=res_num),
+            conv(ch4, 1, kernel_size=3, act=None))
+
+        # filter predictor
+        self.conv_DME = conv(1, ch4, kernel_size=3)
+        self.N = N
+        self.kernel_dim = self.N * (ch4 * self.Fs * 2) + self.N * ch4
+        self.F = nn.Sequential(
+            conv(ch4, ch4, kernel_size=ks),
+            resnet_block(ch4, kernel_size=ks, res_num=res_num),
+            resnet_block(ch4, kernel_size=ks, res_num=res_num),
+            conv(ch4, self.kernel_dim, kernel_size=1, act=None))
+
+        # self.conv4_4=checkpoint_wrapper(self.conv4_4)
+        # self.conv_res=checkpoint_wrapper(self.conv_res)
+        # self.DME=checkpoint_wrapper(self.DME)
+        # self.conv_DME=checkpoint_wrapper(self.conv_DME)
+        # self.F=checkpoint_wrapper(self.F)
+        self.init_F()
+
+    def weights_init_F(self, m):
+        if isinstance(m, torch.nn.Conv2d) or isinstance(m, torch.nn.ConvTranspose2d):
+            torch.nn.init.xavier_uniform_(m.weight, gain=self.wiF)
+            if m.bias is not None:
+                torch.nn.init.constant_(m.bias, 0)
+
+    def init_F(self):
+        self.F.apply(self.weights_init_F)
+
+    ##########################################################################
+    def forward(self, input_img, C):
+        # C = torch.clone(input_img[:, :3, :, :])
+        # feature extractor
+        f1 = self.conv1_3(self.conv1_2(self.conv1_1(C)))
+        f2 = self.conv2_3(self.conv2_2(self.conv2_1(f1)))
+        f3 = self.conv3_3(self.conv3_2(self.conv3_1(f2)))
+        f_C = self.conv4_3(self.conv4_2(self.conv4_1(f3)))
+
+        # filter encoder
+        f = self.kconv1_3(self.kconv1_2(self.kconv1_1(input_img)))
+        f = self.kconv2_3(self.kconv2_2(self.kconv2_1(f)))
+        f = self.kconv3_3(self.kconv3_2(self.kconv3_1(f)))
+        f = self.kconv4_3(self.kconv4_2(self.kconv4_1(f)))
+
+        # disparity map estimator
+        DM = self.DME(f)
+
+        # filter predictor
+        f_DM = self.conv_DME(DM)
+        f = self.conv4_4(torch.cat([f, f_DM], 1))
+        F = self.F(f)
+
+        # IAC
+        f = IAC(f_C, F, self.N, self.ch4, self.Fs)
+
+        # reconstructor
+        f = self.conv_res(f)
+
+        f = self.upconv3_u(f) + f3
+        f = self.upconv3_2(self.upconv3_1(f))
+
+        f = self.upconv2_u(f) + f2
+        f = self.upconv2_2(self.upconv2_1(f))
+
+        f = self.upconv1_u(f) + f1
+        f = self.upconv1_2(self.upconv1_1(f))
+
+        out = self.out_res(f) + C
+
+        # results
+        # outs = collections.OrderedDict()
+
+        # if is_train is False:
+        #     outs['result'] = torch.clip(out, 0, 1.0)
+        # else:
+        #     outs['result'] = out
+        #     # F
+        #     outs['Filter'] = F
+        #
+        #     # DME
+        #     f = self.kconv1_3(self.kconv1_2(self.kconv1_1(torch.cat([R, L], axis=1))))
+        #     f = self.kconv2_3(self.kconv2_2(self.kconv2_1(f)))
+        #     f = self.kconv3_3(self.kconv3_2(self.kconv3_1(f)))
+        #     f = self.kconv4_3(self.kconv4_2(self.kconv4_1(f)))
+        #     DM = self.DME(f)
+        #     f_R_warped = DPD(Func.interpolate(R, scale_factor=1 / 8, mode='area'), DM, padding_mode='zeros',
+        #                      device=self.device)
+        #     outs['f_R_w'] = f_R_warped
+        #     outs['f_L'] = Func.interpolate(L, scale_factor=1 / 8, mode='area')
+
+        return out
+
 
 if __name__ == '__main__':
-    model = MYIR2(                 )
+    model = MYIR2()
     model.cuda()
     from torchsummary import summary
     import os
+
     os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
     os.environ["CUDA_VISIBLE_DEVICES"] = '0'
     # from thop import profile
-    x=summary(model, (6, 128,128))
-    a=1
+    x = summary(model, (6, 256, 256))
+    a = 1
     # flops, params = profile(model, inputs=(torch.randn(1,6,256,256).cuda(),))
     # print('FLOPs = ' + str(flops / 1000 ** 3) + 'G')
     # print('Params = ' + str(params / 1000 ** 2) + 'M')

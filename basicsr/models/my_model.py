@@ -35,6 +35,7 @@ class MYModel(BaseModel):
             self.init_training_settings()
 
         self.flag = 0
+
     def init_training_settings(self):
         self.net_g.train()
         train_opt = self.opt['train']
@@ -91,12 +92,13 @@ class MYModel(BaseModel):
         self.lq = data['lq'].to(self.device)
         if 'gt' in data:
             self.gt = data['gt'].to(self.device)
+        if 'c' in data:
+            self.c = data['c'].to(self.device)
 
     def optimize_parameters(self, current_iter):
         self.optimizer_g.zero_grad()
 
-
-        self.output = self.net_g(self.lq)
+        self.output = self.net_g(self.lq, self.c)
 
         l_total = 0
         loss_dict = OrderedDict()
@@ -117,6 +119,8 @@ class MYModel(BaseModel):
                 loss_dict['l_style'] = l_style
 
         l_total.backward()
+        torch.nn.utils.clip_grad_norm_(self.net_g.parameters(), 0.5)
+
         self.optimizer_g.step()
 
         self.log_dict = self.reduce_loss_dict(loss_dict)
@@ -128,11 +132,11 @@ class MYModel(BaseModel):
         if hasattr(self, 'net_g_ema'):
             self.net_g_ema.eval()
             with torch.no_grad():
-                self.output = self.net_g_ema(self.lq)
+                self.output = self.net_g_ema(self.lq, self.c)
         else:
             self.net_g.eval()
             with torch.no_grad():
-                self.output = self.net_g(self.lq)
+                self.output = self.net_g(self.lq, self.c)
             self.net_g.train()
 
     def test_selfensemble(self):
@@ -240,7 +244,7 @@ class MYModel(BaseModel):
                 # calculate metrics
                 for name, opt_ in self.opt['val']['metrics'].items():
                     self.metric_results[name] += calculate_metric(metric_data, opt_)
-                    if self.flag <20:
+                    if self.flag < 20:
                         lq = val_data['lq'][:, -3:, :, :]
                         lq_img = tensor2img([lq])
                         print(calculate_metric({"img": lq_img, "img2": metric_data['img2']}, opt_))

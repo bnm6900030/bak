@@ -2,6 +2,7 @@ import cv2
 import random
 import numpy as np
 
+
 def mod_crop(img, scale):
     """Mod crop images, used during testing.
 
@@ -20,6 +21,7 @@ def mod_crop(img, scale):
     else:
         raise ValueError(f'Wrong img ndim: {img.ndim}.')
     return img
+
 
 def paired_random_crop(img_gts, img_lqs, lq_patch_size, scale, gt_path):
     """Paired random crop.
@@ -82,17 +84,20 @@ def paired_random_crop(img_gts, img_lqs, lq_patch_size, scale, gt_path):
         img_lqs = img_lqs[0]
     return img_gts, img_lqs
 
-def paired_random_crop_DP(img_lqLs, img_lqRs, img_gts, gt_patch_size, scale, gt_path):
+
+def paired_random_crop_DP(img_lqLs, img_lqRs, img_gts, img_c, scale, gt_size=256):
     if not isinstance(img_gts, list):
         img_gts = [img_gts]
     if not isinstance(img_lqLs, list):
         img_lqLs = [img_lqLs]
     if not isinstance(img_lqRs, list):
         img_lqRs = [img_lqRs]
+    if not isinstance(img_c, list):
+        img_c = [img_c]
 
     h_lq, w_lq, _ = img_lqLs[0].shape
     h_gt, w_gt, _ = img_gts[0].shape
-    lq_patch_size = gt_patch_size // scale
+    lq_patch_size = gt_size // scale
 
     if h_gt != h_lq * scale or w_gt != w_lq * scale:
         raise ValueError(
@@ -100,8 +105,7 @@ def paired_random_crop_DP(img_lqLs, img_lqRs, img_gts, gt_patch_size, scale, gt_
             f'multiplication of LQ ({h_lq}, {w_lq}).')
     if h_lq < lq_patch_size or w_lq < lq_patch_size:
         raise ValueError(f'LQ ({h_lq}, {w_lq}) is smaller than patch size '
-                         f'({lq_patch_size}, {lq_patch_size}). '
-                         f'Please remove {gt_path}.')
+                         f'({lq_patch_size}, {lq_patch_size}). ')
 
     # randomly choose top and left coordinates for lq patch
     top = random.randint(0, h_lq - lq_patch_size)
@@ -117,11 +121,15 @@ def paired_random_crop_DP(img_lqLs, img_lqRs, img_gts, gt_patch_size, scale, gt_
         v[top:top + lq_patch_size, left:left + lq_patch_size, ...]
         for v in img_lqRs
     ]
+    img_c = [
+        v[top:top + lq_patch_size, left:left + lq_patch_size, ...]
+        for v in img_c
+    ]
 
     # crop corresponding gt patch
     top_gt, left_gt = int(top * scale), int(left * scale)
     img_gts = [
-        v[top_gt:top_gt + gt_patch_size, left_gt:left_gt + gt_patch_size, ...]
+        v[top_gt:top_gt + gt_size, left_gt:left_gt + gt_size, ...]
         for v in img_gts
     ]
     if len(img_gts) == 1:
@@ -130,7 +138,9 @@ def paired_random_crop_DP(img_lqLs, img_lqRs, img_gts, gt_patch_size, scale, gt_
         img_lqLs = img_lqLs[0]
     if len(img_lqRs) == 1:
         img_lqRs = img_lqRs[0]
-    return img_lqLs, img_lqRs, img_gts
+    if len(img_c) == 1:
+        img_c = img_c[0]
+    return img_lqLs, img_lqRs, img_gts, img_c
 
 
 def augment(imgs, hflip=True, rotation=True, flows=None, return_status=False):
@@ -220,6 +230,7 @@ def img_rotate(img, angle, center=None, scale=1.0):
     rotated_img = cv2.warpAffine(img, matrix, (w, h))
     return rotated_img
 
+
 def data_augmentation(image, mode):
     """
     Performs data augmentation of the input image
@@ -267,9 +278,10 @@ def data_augmentation(image, mode):
 
     return out
 
+
 def random_augmentation(*args):
     out = []
-    flag_aug = random.randint(0,7)
+    flag_aug = random.randint(0, 7)
     for data in args:
         out.append(data_augmentation(data, flag_aug).copy())
     return out

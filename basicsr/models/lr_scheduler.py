@@ -52,7 +52,7 @@ def get_position_from_periods(iteration, cumulative_period):
     for i, period in enumerate(cumulative_period):
         if iteration <= period:
             return i
-
+    # return 1
 
 class CosineAnnealingRestartLR(_LRScheduler):
     """ Cosine annealing with restarts learning rate scheme.

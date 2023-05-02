@@ -115,15 +115,8 @@ class NATransformerLayer(nn.Module):
 
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
         self.norm2 = norm_layer(dim, eps=1e-6)
-        mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = FeedForward(dim, 2.66, False)
 
-        # self.mlp = Mlp(
-        #     in_features=dim,
-        #     hidden_features=mlp_hidden_dim,
-        #     act_layer=act_layer,
-        #     drop=drop,
-        # )
 
     def forward(self, x):
         shortcut = x
@@ -151,12 +144,6 @@ class PatchMerging(nn.Module):
 
 
 class BasicLayer(nn.Module):
-    """
-    Based on Swin Transformer
-    https://arxiv.org/abs/2103.14030
-    https://github.com/microsoft/Swin-Transformer
-    """
-
     def __init__(
             self,
             dim,

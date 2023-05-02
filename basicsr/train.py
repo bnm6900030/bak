@@ -13,7 +13,7 @@ from basicsr.data.data_sampler import EnlargedSampler
 from basicsr.data.prefetch_dataloader import CPUPrefetcher, CUDAPrefetcher
 from basicsr.models import build_model
 from basicsr.utils.logger import AvgTimer
-from basicsr.utils import ( MessageLogger, check_resume, get_env_info, get_root_logger, get_time_str,
+from basicsr.utils import (MessageLogger, check_resume, get_env_info, get_root_logger, get_time_str,
                            init_tb_logger, init_wandb_logger, make_exp_dirs, mkdir_and_rename, scandir)
 from basicsr.utils.options import copy_opt_file, dict2str, parse_options
 
@@ -155,16 +155,16 @@ def train_pipeline(root_path):
     data_timer, iter_timer = AvgTimer(), AvgTimer()
     start_time = time.time()
 
-#------------------------
-    # iters = opt['datasets']['train'].get('iters')
-    # batch_size = opt['datasets']['train'].get('batch_size_per_gpu')
-    # mini_batch_sizes = opt['datasets']['train'].get('mini_batch_sizes')
-    # gt_size = opt['datasets']['train'].get('gt_size')
-    # mini_gt_sizes = opt['datasets']['train'].get('gt_sizes')
-    # groups = np.array([sum(iters[0:i + 1]) for i in range(0, len(iters))])
-    # logger_j = [True] * len(groups)
+    # ------------------------
+    iters = opt['datasets']['train'].get('iters')
+    batch_size = opt['datasets']['train'].get('batch_size_per_gpu')
+    mini_batch_sizes = opt['datasets']['train'].get('mini_batch_sizes')
+    gt_size = opt['datasets']['train'].get('gt_size')
+    mini_gt_sizes = opt['datasets']['train'].get('gt_sizes')
+    groups = np.array([sum(iters[0:i + 1]) for i in range(0, len(iters))])
+    logger_j = [True] * len(groups)
 
-#-----------------------
+    # -----------------------
     for epoch in range(start_epoch, total_epochs + 1):
         train_sampler.set_epoch(epoch)
         prefetcher.reset()
@@ -179,41 +179,44 @@ def train_pipeline(root_path):
             # update learning rate
             model.update_learning_rate(current_iter, warmup_iter=opt['train'].get('warmup_iter', -1))
 
-            #------------------------
-            # j = ((current_iter > groups) != True).nonzero()[0]
-            # if len(j) == 0:
-            #     bs_j = len(groups) - 1
-            # else:
-            #     bs_j = j[0]
-            #
-            # mini_gt_size = mini_gt_sizes[bs_j]
-            # mini_batch_size = mini_batch_sizes[bs_j]
-            #
-            # if logger_j[bs_j]:
-            #     logger.info('\n Updating Patch_Size to {} and Batch_Size to {} \n'.format(mini_gt_size,
-            #                                                                               mini_batch_size * torch.cuda.device_count()))
-            #     logger_j[bs_j] = False
-            #
-            # lq = train_data['lq']
-            # gt = train_data['gt']
-            #
-            # if mini_batch_size < batch_size:
-            #     indices = random.sample(range(0, batch_size), k=mini_batch_size)
-            #     lq = lq[indices]
-            #     gt = gt[indices]
-            #
-            # if mini_gt_size < gt_size:
-            #     x0 = int((gt_size - mini_gt_size) * random.random())
-            #     y0 = int((gt_size - mini_gt_size) * random.random())
-            #     x1 = x0 + mini_gt_size
-            #     y1 = y0 + mini_gt_size
-            #     lq = lq[:, :, x0:x1, y0:y1]
-            #     gt = gt[:, :, x0 :x1 , y0 :y1 ]
-            #------------------------
-            # training
-            # model.feed_data({'lq': lq, 'gt': gt})
+            # ------------------------
+            j = ((current_iter > groups) != True).nonzero()[0]
+            if len(j) == 0:
+                bs_j = len(groups) - 1
+            else:
+                bs_j = j[0]
 
-            model.feed_data(train_data)
+            mini_gt_size = mini_gt_sizes[bs_j]
+            mini_batch_size = mini_batch_sizes[bs_j]
+
+            if logger_j[bs_j]:
+                logger.info('\n Updating Patch_Size to {} and Batch_Size to {} \n'.format(mini_gt_size,
+                                                                                          mini_batch_size * torch.cuda.device_count()))
+                logger_j[bs_j] = False
+
+            lq = train_data['lq']
+            gt = train_data['gt']
+            c = train_data['c']
+
+            if mini_batch_size < batch_size:
+                indices = random.sample(range(0, batch_size), k=mini_batch_size)
+                lq = lq[indices]
+                gt = gt[indices]
+                c = c[indices]
+
+            if mini_gt_size < gt_size:
+                x0 = int((gt_size - mini_gt_size) * random.random())
+                y0 = int((gt_size - mini_gt_size) * random.random())
+                x1 = x0 + mini_gt_size
+                y1 = y0 + mini_gt_size
+                lq = lq[:, :, x0:x1, y0:y1]
+                gt = gt[:, :, x0:x1, y0:y1]
+                c = c[:, :, x0:x1, y0:y1]
+            # ------------------------
+            # training
+            model.feed_data({'lq': lq, 'gt': gt, 'c': c})
+
+            # model.feed_data(train_data)
             model.optimize_parameters(current_iter)
             iter_timer.record()
             if current_iter == 1:

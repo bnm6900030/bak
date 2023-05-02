@@ -124,13 +124,12 @@ def imfrombytes(content, flag='color', float32=False):
         img = img.astype(np.float32) / 255.
     return img
 
-def imfrombytesDP(content, flag='color', float32=False):
+
+def imfrombytesDP(content, float32=False):
     """Read an image from bytes.
 
     Args:
         content (bytes): Image bytes got from files or other streams.
-        flag (str): Flags specifying the color type of a loaded image,
-            candidates are `color`, `grayscale` and `unchanged`.
         float32 (bool): Whether to change to float32., If True, will also norm
             to [0, 1]. Default: False.
 
@@ -145,12 +144,13 @@ def imfrombytesDP(content, flag='color', float32=False):
         img = img.astype(np.float32) / 65535.
     return img
 
+
 def padding(img_lq, img_gt, gt_size):
     h, w, _ = img_lq.shape
 
     h_pad = max(0, gt_size - h)
     w_pad = max(0, gt_size - w)
-    
+
     if h_pad == 0 and w_pad == 0:
         return img_lq, img_gt
 
@@ -163,20 +163,21 @@ def padding(img_lq, img_gt, gt_size):
         img_gt = np.expand_dims(img_gt, axis=2)
     return img_lq, img_gt
 
-def padding_DP(img_lqL, img_lqR, img_gt, gt_size):
-    h, w, _ = img_gt.shape
 
+def padding_DP(*args):
+    out = []
+    h, w, _ = args[0].shape
+    gt_size = 256
     h_pad = max(0, gt_size - h)
     w_pad = max(0, gt_size - w)
-    
-    if h_pad == 0 and w_pad == 0:
-        return img_lqL, img_lqR, img_gt
 
-    img_lqL = cv2.copyMakeBorder(img_lqL, 0, h_pad, 0, w_pad, cv2.BORDER_REFLECT)
-    img_lqR = cv2.copyMakeBorder(img_lqR, 0, h_pad, 0, w_pad, cv2.BORDER_REFLECT)
-    img_gt  = cv2.copyMakeBorder(img_gt,  0, h_pad, 0, w_pad, cv2.BORDER_REFLECT)
-    # print('img_lq', img_lq.shape, img_gt.shape)
-    return img_lqL, img_lqR, img_gt
+    for img in args:
+        if h_pad == 0 and w_pad == 0:
+            out.append(img)
+        else:
+            out.append(cv2.copyMakeBorder(img, 0, h_pad, 0, w_pad, cv2.BORDER_REFLECT))
+    return out
+
 
 def imwrite(img, file_path, params=None, auto_mkdir=True):
     """Write image to file.
@@ -217,4 +218,4 @@ def crop_border(imgs, crop_border):
             ]
         else:
             return imgs[crop_border:-crop_border, crop_border:-crop_border,
-                        ...]
+                   ...]

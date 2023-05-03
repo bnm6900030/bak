@@ -14,7 +14,7 @@ from glob import glob
 
 import lpips
 
-from basicsr.archs.my2_arch import MYIR2
+from basicsr.archs.my3_arch import MYIR3
 
 # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
@@ -64,8 +64,8 @@ parser.add_argument('--result_dir',
                     default='/root/autodl-tmp/pycharm_project_983/results/Dual_Pixel_Defocus_Deblurring/', type=str,
                     help='Directory for results')
 parser.add_argument('--weights',
-                    # default='/home/lab/code1/IR/experiments/train_MYIR_scratch/models/net_g_74000.pth', type=str,
-                    default='/data/code/IFAN/ckpt/IFAN_dual.pytorch', type=str,
+                    default='/home/lab/code1/IR/experiments/train_MYIR_scratch/models/net_g_200.pth', type=str,
+                    # default='/data/code/IFAN/ckpt/IFAN_dual.pytorch', type=str,
                     # default='/root/autodl-tmp/pycharm_project_983/experiments/train_MYIR_scratch/models/net_g_144000.pth', type=str,
                     help='Path to weights')
 parser.add_argument('--save_images', default=True, help='Save denoised images in result directory')
@@ -73,7 +73,8 @@ parser.add_argument('--save_images', default=True, help='Save denoised images in
 args = parser.parse_args()
 
 ####### Load yaml #######
-yaml_file = '/home/lab/code1/IR/options/train/SwinIR/train_MYIR_scratch2.yml'
+# yaml_file = '/home/lab/code1/IR/options/train/SwinIR/train_MYIR_scratch2.yml'
+yaml_file = '/home/lab/code1/IR/options/train/SwinIR/train_3.yml'
 # yaml_file = '/root/autodl-tmp/pycharm_project_983/options/train/SwinIR/train_MYIR_scratch3.yml'
 import yaml
 
@@ -87,17 +88,17 @@ x = yaml.load(open(yaml_file, mode='r'), Loader=Loader)
 s = x['network_g'].pop('type')
 ##########################
 device = torch.device("cuda")
-model_restoration = MYIR2(**x['network_g'])
+model_restoration = MYIR3(**x['network_g'])
 device_id = torch.cuda.current_device()
 
 checkpoint = torch.load(args.weights, map_location=lambda storage, loc: storage.cuda(device_id))
-# checkpoint = torch.load(args.weights,)
-a = {}
-for key, v in checkpoint.items():
-    if not key[15:].startswith('t.RBF'):
-        a[key[15:]] = v
-# model_restoration.load_state_dict(checkpoint['params'])
-model_restoration.load_state_dict(a)
+
+# a = {}
+# for key, v in checkpoint.items():
+#     if not key[15:].startswith('t.RBF'):
+#         a[key[15:]] = v
+model_restoration.load_state_dict(checkpoint['params'])
+# model_restoration.load_state_dict(a)
 
 print("===>Testing using weights: ", args.weights)
 # model_restoration.cuda()
@@ -151,25 +152,25 @@ psnr, mae, ssim, pips = [], [], [], []
 with torch.no_grad():
     for fileL, fileR, fileC in tqdm(zip(filesL, filesR, filesC), total=len(filesC)):
 
-        # imgL = np.float32(load_img16(fileL)) / 65535.
-        # imgR = np.float32(load_img16(fileR)) / 65535.
-        # imgC = np.float32(load_img16(fileC)) / 65535.
-        # imgCC = np.float32(load_img16('/data/junyonglee/defocus_deblur/DPDD/test_c/source/' + fileC[-12:])) / 65535.
-        # patchCC = torch.from_numpy(imgCC).unsqueeze(0).permute(0, 3, 1, 2).to('cuda')
-        # patchC = torch.from_numpy(imgC).unsqueeze(0).permute(0, 3, 1, 2).to('cuda')
-        # patchL = torch.from_numpy(imgL).unsqueeze(0).permute(0, 3, 1, 2)
-        # patchR = torch.from_numpy(imgR).unsqueeze(0).permute(0, 3, 1, 2)
-        # input_ = torch.cat([patchL, patchR], 1)
+        imgL = np.float32(load_img16(fileL)) / 65535.
+        imgR = np.float32(load_img16(fileR)) / 65535.
+        imgC = np.float32(load_img16(fileC)) / 65535.
+        imgCC = np.float32(load_img16('/data/junyonglee/defocus_deblur/DPDD/test_c/source/' + fileC[-12:])) / 65535.
+        patchCC = torch.from_numpy(imgCC).unsqueeze(0).permute(0, 3, 1, 2).to('cuda')
+        patchC = torch.from_numpy(imgC).unsqueeze(0).permute(0, 3, 1, 2).to('cuda')
+        patchL = torch.from_numpy(imgL).unsqueeze(0).permute(0, 3, 1, 2)
+        patchR = torch.from_numpy(imgR).unsqueeze(0).permute(0, 3, 1, 2)
+        input_ = torch.cat([patchL, patchR], 1)
 
-        imgL = refine_image(read_frame(fileL, 255, None), 8)
-        imgR = refine_image(read_frame(fileR, 255, None), 8)
-        imgC = refine_image(read_frame(fileC, 255, None), 8)
-        imgCC = refine_image(read_frame('/data/junyonglee/defocus_deblur/DPDD/test_c/source/'+fileC[-12:], 255, None), 8)
-        patchC = torch.FloatTensor(imgC.transpose(0, 3, 1, 2).copy()).to('cuda')
-        patchL = torch.FloatTensor(imgL.transpose(0, 3, 1, 2).copy()).to('cuda')
-        patchR = torch.FloatTensor(imgR.transpose(0, 3, 1, 2).copy()).to('cuda')
-        patchCC = torch.FloatTensor(imgCC.transpose(0, 3, 1, 2).copy()).to('cuda')
-        input_ = torch.cat([patchR, patchL], 1)
+        # imgL = refine_image(read_frame(fileL, 255, None), 8)
+        # imgR = refine_image(read_frame(fileR, 255, None), 8)
+        # imgC = refine_image(read_frame(fileC, 255, None), 8)
+        # imgCC = refine_image(read_frame('/data/junyonglee/defocus_deblur/DPDD/test_c/source/'+fileC[-12:], 255, None), 8)
+        # patchC = torch.FloatTensor(imgC.transpose(0, 3, 1, 2).copy()).to('cuda')
+        # patchL = torch.FloatTensor(imgL.transpose(0, 3, 1, 2).copy()).to('cuda')
+        # patchR = torch.FloatTensor(imgR.transpose(0, 3, 1, 2).copy()).to('cuda')
+        # patchCC = torch.FloatTensor(imgCC.transpose(0, 3, 1, 2).copy()).to('cuda')
+        # input_ = torch.cat([patchR, patchL], 1)
 
         # restored = imgR
 
@@ -183,7 +184,7 @@ with torch.no_grad():
         # restored = torch.cat([input_1, input_2], 3)
 
         # else:
-        restored = model_restoration(input_.cuda(0), patchCC.cuda(0))
+        restored, _ = model_restoration(input_.cuda(0), patchCC.cuda(0))
 
         #
         restored = torch.clamp(restored, 0, 1)
@@ -191,16 +192,16 @@ with torch.no_grad():
 
 
         # caculate
-        # psnr.append(PSNR(imgC, restored))
-        # print(PSNR(imgC, restored))
-        # mae.append(MAE(imgC, restored))
-        # ssim.append(SSIM(imgC, restored))
+        psnr.append(PSNR(imgC, restored))
+        print(PSNR(imgC, restored))
+        mae.append(MAE(imgC, restored))
+        ssim.append(SSIM(imgC, restored))
 
-        gt = patchC.cpu().numpy()[0].transpose(1, 2, 0)
-        psnr.append(PSNR(gt, restored))
-        print(PSNR(gt, restored))
-        mae.append(MAE(gt, restored))
-        ssim.append(SSIM(gt, restored))
+        # gt = patchC.cpu().numpy()[0].transpose(1, 2, 0)
+        # psnr.append(PSNR(gt, restored))
+        # print(PSNR(gt, restored))
+        # mae.append(MAE(gt, restored))
+        # ssim.append(SSIM(gt, restored))
 
 
         # pips.append(alex(patchC, restored, normalize=True).item())
@@ -239,3 +240,7 @@ print("Outdoor: PSNR {:4f} SSIM {:4f} MAE {:4f} LPIPS {:4f}".format(np.mean(psnr
 # Overall: PSNR 26.023693 SSIM 0.805778 MAE 0.037130 LPIPS 0.805778
 # Indoor:  PSNR 28.699427 SSIM 0.870385 MAE 0.024749 LPIPS 0.024749
 # Outdoor: PSNR 23.485176 SSIM 0.744484 MAE 0.048877 LPIPS 0.024749
+
+# Overall: PSNR 23.907366 SSIM 0.726921 MAE 0.047212 LPIPS 0.726921
+# Indoor:  PSNR 26.379628 SSIM 0.810132 MAE 0.033586 LPIPS 0.033586
+# Outdoor: PSNR 21.561887 SSIM 0.647977 MAE 0.060138 LPIPS 0.033586

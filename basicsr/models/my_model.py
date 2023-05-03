@@ -2,6 +2,7 @@ import torch
 from collections import OrderedDict
 from os import path as osp
 from tqdm import tqdm
+import torch.nn.functional as F
 
 from basicsr.archs import build_network
 from basicsr.losses import build_loss
@@ -98,10 +99,15 @@ class MYModel(BaseModel):
     def optimize_parameters(self, current_iter):
         self.optimizer_g.zero_grad()
 
-        self.output = self.net_g(self.lq, self.c)
+        self.output, R_wraped_by_dme = self.net_g(self.lq, self.c)
 
         l_total = 0
         loss_dict = OrderedDict()
+
+        # dme loss
+        l_dme = self.cri_pix(R_wraped_by_dme, F.interpolate(self.lq[:, 3:, :, :], scale_factor=1 / 4, mode='area'))
+        l_total += l_dme
+        loss_dict['l_dme'] = l_dme
         # pixel loss
         if self.cri_pix:
             # l_pix = self.cri_pix(self.output, self.lq[:,-3:,:,:])
@@ -132,11 +138,11 @@ class MYModel(BaseModel):
         if hasattr(self, 'net_g_ema'):
             self.net_g_ema.eval()
             with torch.no_grad():
-                self.output = self.net_g_ema(self.lq, self.c)
+                self.output, _ = self.net_g_ema(self.lq, self.c)
         else:
             self.net_g.eval()
             with torch.no_grad():
-                self.output = self.net_g(self.lq, self.c)
+                self.output, _ = self.net_g(self.lq, self.c)
             self.net_g.train()
 
     def test_selfensemble(self):

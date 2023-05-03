@@ -64,15 +64,17 @@ class Dataset_DefocusDeblur_DualPixel_16bit(data.Dataset):
             img_lqL, img_lqR, img_gt, img_c = padding_DP(*imgs_np)
 
             # random crop
-            img_lqL, img_lqR, img_gt = paired_random_crop_DP(img_lqL, img_lqR, img_gt, img_c, scale)
+            img_lqL, img_lqR, img_gt, img_c = paired_random_crop_DP(img_lqL, img_lqR, img_gt, img_c, scale)
 
             # flip, rotation
             if self.geometric_augs:
                 img_lqL, img_lqR, img_gt, img_c = random_augmentation(img_lqL, img_lqR, img_gt, img_c)
+        else:
+            img_lqL, img_lqR, img_gt, img_c = imgs_np
 
-        # TODO: color space transform
         # BGR to RGB, HWC to CHW, numpy to tensor
         img_lqL, img_lqR, img_gt, img_c = img2tensor([img_lqL, img_lqR, img_gt, img_c], bgr2rgb=True, float32=True)
+
         # normalize
         if self.mean is not None or self.std is not None:
             normalize(img_lqL, self.mean, self.std, inplace=True)
@@ -84,7 +86,10 @@ class Dataset_DefocusDeblur_DualPixel_16bit(data.Dataset):
         # img_lqL = resize(img_lqL)
         # img_lqR = resize(img_lqR)
         # img_gt = resize(img_gt)
-        img_lq = torch.cat([img_lqR, img_lqL], 0)
+        try:
+            img_lq = torch.cat([img_lqR, img_lqL], 0)
+        except:
+            a = 1
         # self.cache_data[index] = {
         #     'lq': img_lq,
         #     # 'lq': img_lqR,

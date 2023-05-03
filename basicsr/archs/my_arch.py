@@ -357,7 +357,7 @@ if __name__ == '__main__':
     os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
     os.environ["CUDA_VISIBLE_DEVICES"] = '0'
     # from thop import profile
-    summary(model, (6, 1120,880))
+    summary(model, (6, 256,256))
     # flops, params = profile(model, inputs=(torch.randn(1,6,256,256).cuda(),))
     # print('FLOPs = ' + str(flops / 1000 ** 3) + 'G')
     # print('Params = ' + str(params / 1000 ** 2) + 'M')

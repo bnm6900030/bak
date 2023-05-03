@@ -265,21 +265,24 @@ def paired_DP_paths_from_folder(folders, keys, filename_tmpl):
     Returns:
         list[str]: Returned path list.
     """
-    assert len(folders) == 3, (
+    assert len(folders) == 4, (
         'The len of folders should be 3 with [inputL_folder, inputR_folder, gt_folder]. '
         f'But got {len(folders)}')
-    assert len(keys) == 3, (
+    assert len(keys) == 4, (
         'The len of keys should be 2 with [inputL_key, inputR_key, gt_key]. '
         f'But got {len(keys)}')
-    inputL_folder, inputR_folder, gt_folder = folders
-    inputL_key, inputR_key, gt_key = keys
+    inputL_folder, inputR_folder, gt_folder, inputC_folder = folders
+    inputL_key, inputR_key, gt_key, inputC_key = keys
 
     inputL_paths = list(scandir(inputL_folder))
     inputR_paths = list(scandir(inputR_folder))
+    inputC_paths = list(scandir(inputC_folder))
     gt_paths = list(scandir(gt_folder))
+
     assert len(inputL_paths) == len(inputR_paths) == len(gt_paths), (
         f'{inputL_key} and {inputR_key} and {gt_key} datasets have different number of images: '
         f'{len(inputL_paths)}, {len(inputR_paths)}, {len(gt_paths)}.')
+
     paths = []
     for idx in range(len(gt_paths)):
         gt_path = gt_paths[idx]
@@ -296,10 +299,21 @@ def paired_DP_paths_from_folder(folders, keys, filename_tmpl):
         inputR_path = osp.join(inputR_folder, inputR_name)
         assert inputR_name in inputR_paths, (f'{inputR_name} is not in '
                                            f'{inputR_key}_paths.')
+
+        inputC_path = inputC_paths[idx]
+        basename_input, ext_input = osp.splitext(osp.basename(inputC_path))
+        inputC_name = f'{filename_tmpl.format(basename)}{ext_input}'
+        inputC_path = osp.join(inputC_folder, inputC_name)
+        assert inputC_name in inputC_paths, (f'{inputC_name} is not in '
+                                           f'{inputC_key}_paths.')
+
+
+
         gt_path = osp.join(gt_folder, gt_path)
         paths.append(
             dict([(f'{inputL_key}_path', inputL_path),
                   (f'{inputR_key}_path', inputR_path),
+                  (f'{inputC_key}_path', inputC_path),
                   (f'{gt_key}_path', gt_path)]))
     return paths
 

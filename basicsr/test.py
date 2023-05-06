@@ -14,7 +14,7 @@ from glob import glob
 
 import lpips
 
-from basicsr.archs.my3_arch import MYIR3
+# from basicsr.archs.my_arch import MYIR
 
 # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
@@ -64,7 +64,7 @@ parser.add_argument('--result_dir',
                     default='/root/autodl-tmp/pycharm_project_983/results/Dual_Pixel_Defocus_Deblurring/', type=str,
                     help='Directory for results')
 parser.add_argument('--weights',
-                    default='/home/lab/code1/IR/experiments/train_MYIR_scratch/models/net_g_200.pth', type=str,
+                    default='/home/lab/code1/IR/experiments/train_MYIR_scratch/models/net_g_8000.pth', type=str,
                     # default='/data/code/IFAN/ckpt/IFAN_dual.pytorch', type=str,
                     # default='/root/autodl-tmp/pycharm_project_983/experiments/train_MYIR_scratch/models/net_g_144000.pth', type=str,
                     help='Path to weights')
@@ -88,7 +88,7 @@ x = yaml.load(open(yaml_file, mode='r'), Loader=Loader)
 s = x['network_g'].pop('type')
 ##########################
 device = torch.device("cuda")
-model_restoration = MYIR3(**x['network_g'])
+# model_restoration = MYIR(**x['network_g'])
 device_id = torch.cuda.current_device()
 
 checkpoint = torch.load(args.weights, map_location=lambda storage, loc: storage.cuda(device_id))
@@ -97,13 +97,13 @@ checkpoint = torch.load(args.weights, map_location=lambda storage, loc: storage.
 # for key, v in checkpoint.items():
 #     if not key[15:].startswith('t.RBF'):
 #         a[key[15:]] = v
-model_restoration.load_state_dict(checkpoint['params'])
+# model_restoration.load_state_dict(checkpoint['params'])
 # model_restoration.load_state_dict(a)
 
 print("===>Testing using weights: ", args.weights)
 # model_restoration.cuda()
-model_restoration = nn.DataParallel(model_restoration)
-model_restoration.eval()
+# model_restoration = nn.DataParallel(model_restoration)
+# model_restoration.eval()
 
 result_dir = args.result_dir
 if args.save_images:
@@ -155,12 +155,14 @@ with torch.no_grad():
         imgL = np.float32(load_img16(fileL)) / 65535.
         imgR = np.float32(load_img16(fileR)) / 65535.
         imgC = np.float32(load_img16(fileC)) / 65535.
+        # imgCC = imgC
         imgCC = np.float32(load_img16('/data/junyonglee/defocus_deblur/DPDD/test_c/source/' + fileC[-12:])) / 65535.
+        # imgCC = np.float32(load_img16('/root/autodl-tmp/test/inputC' + fileC[-12:])) / 65535.
         patchCC = torch.from_numpy(imgCC).unsqueeze(0).permute(0, 3, 1, 2).to('cuda')
         patchC = torch.from_numpy(imgC).unsqueeze(0).permute(0, 3, 1, 2).to('cuda')
         patchL = torch.from_numpy(imgL).unsqueeze(0).permute(0, 3, 1, 2)
         patchR = torch.from_numpy(imgR).unsqueeze(0).permute(0, 3, 1, 2)
-        input_ = torch.cat([patchL, patchR], 1)
+        input_ = torch.cat([patchR, patchL], 1)
 
         # imgL = refine_image(read_frame(fileL, 255, None), 8)
         # imgR = refine_image(read_frame(fileR, 255, None), 8)
@@ -172,19 +174,19 @@ with torch.no_grad():
         # patchCC = torch.FloatTensor(imgCC.transpose(0, 3, 1, 2).copy()).to('cuda')
         # input_ = torch.cat([patchR, patchL], 1)
 
-        # restored = imgR
+        restored = patchCC
 
         #  if split
         # input_1 = torch.clone(input_[:, :, :, :input_.shape[3] // 2])
         # input_2 = torch.clone(input_[:, :, :, input_.shape[3] // 2:])
         # input_1C = torch.clone(patchCC[:, :, :, :input_.shape[3] // 2])
         # input_2C = torch.clone(patchCC[:, :, :, input_.shape[3] // 2:])
-        # input_1 = model_restoration(input_1.cuda(0), input_1C)
-        # input_2 = model_restoration(input_2.cuda(0), input_2C)
+        # input_1,_ = model_restoration(input_1.cuda(0), input_1C)
+        # input_2,_ = model_restoration(input_2.cuda(0), input_2C)
         # restored = torch.cat([input_1, input_2], 3)
 
         # else:
-        restored, _ = model_restoration(input_.cuda(0), patchCC.cuda(0))
+        # restored, _ = model_restoration(input_.cuda(0), patchCC.cuda(0))
 
         #
         restored = torch.clamp(restored, 0, 1)
@@ -194,6 +196,7 @@ with torch.no_grad():
         # caculate
         psnr.append(PSNR(imgC, restored))
         print(PSNR(imgC, restored))
+        print(PSNR(restored, imgC))
         mae.append(MAE(imgC, restored))
         ssim.append(SSIM(imgC, restored))
 
@@ -223,24 +226,12 @@ print("Indoor:  PSNR {:4f} SSIM {:4f} MAE {:4f} LPIPS {:4f}".format(np.mean(psnr
                                                                     np.mean(mae_indoor), np.mean(mae_indoor)))
 print("Outdoor: PSNR {:4f} SSIM {:4f} MAE {:4f} LPIPS {:4f}".format(np.mean(psnr_outdoor), np.mean(ssim_outdoor),
                                                                     np.mean(mae_outdoor), np.mean(mae_indoor)))
-# Overall: PSNR 23.785344 SSIM 0.716311 MAE 0.047779 LPIPS 0.716311
-# Indoor:  PSNR 26.217412 SSIM 0.795828 MAE 0.034156 LPIPS 0.034156
-# Outdoor: PSNR 21.477998 SSIM 0.640872 MAE 0.060703 LPIPS 0.034156
+# origin
+# Overall: PSNR 23.927591 SSIM 0.727416 MAE 0.046947 LPIPS 0.727416
+# Indoor:  PSNR 26.412803 SSIM 0.810706 MAE 0.033215 LPIPS 0.033215
+# Outdoor: PSNR 21.569825 SSIM 0.648397 MAE 0.059975 LPIPS 0.033215
 
-# Overall: PSNR 25.566490 SSIM 0.794726 MAE 0.038873 LPIPS 0.794726
-# Indoor:  PSNR 28.258082 SSIM 0.865417 MAE 0.025477 LPIPS 0.025477
-# Outdoor: PSNR 23.012930 SSIM 0.727660 MAE 0.051581 LPIPS 0.025477
-
-# Overall: PSNR 24.534078 SSIM 0.756053 MAE 0.043077 LPIPS 0.756053
-# Indoor:  PSNR 27.026428 SSIM 0.831138 MAE 0.029181 LPIPS 0.029181
-# Outdoor: PSNR 22.169542 SSIM 0.684820 MAE 0.056260 LPIPS 0.029181
-# Overall: PSNR 24.497103 SSIM 0.753728 MAE 0.043261 LPIPS 0.753728
-# Indoor:  PSNR 26.988409 SSIM 0.828767 MAE 0.029318 LPIPS 0.029318
-# Outdoor: PSNR 22.133556 SSIM 0.682537 MAE 0.056488 LPIPS 0.029318
+# IFAN
 # Overall: PSNR 26.023693 SSIM 0.805778 MAE 0.037130 LPIPS 0.805778
 # Indoor:  PSNR 28.699427 SSIM 0.870385 MAE 0.024749 LPIPS 0.024749
 # Outdoor: PSNR 23.485176 SSIM 0.744484 MAE 0.048877 LPIPS 0.024749
-
-# Overall: PSNR 23.907366 SSIM 0.726921 MAE 0.047212 LPIPS 0.726921
-# Indoor:  PSNR 26.379628 SSIM 0.810132 MAE 0.033586 LPIPS 0.033586
-# Outdoor: PSNR 21.561887 SSIM 0.647977 MAE 0.060138 LPIPS 0.033586

@@ -28,7 +28,7 @@ class Dataset_DefocusDeblur_DualPixel_16bit(data.Dataset):
 
         self.paths = paired_DP_paths_from_folder(
             [opt['dataroot_gt'], opt['dataroot_lqL'], opt['dataroot_lqR'], opt['dataroot_lqC']],
-            ['lqL', 'lqR', 'gt', 'c'],
+            ['gt', 'lqL', 'lqR', 'c'],
             self.filename_tmpl)
 
         if self.opt['phase'] == 'train':
@@ -57,11 +57,12 @@ class Dataset_DefocusDeblur_DualPixel_16bit(data.Dataset):
                 imgs_np.append(imfrombytesDP(img_bytes, float32=True))
             except:
                 raise Exception("gt path {} not working".format(path))
+        img_gt, img_lqL, img_lqR, img_c = imgs_np
 
         # augmentation for training
         if self.opt['phase'] == 'train':
             # padding
-            img_lqL, img_lqR, img_gt, img_c = padding_DP(*imgs_np)
+            img_lqL, img_lqR, img_gt, img_c = padding_DP(img_lqL, img_lqR, img_gt, img_c)
 
             # random crop
             img_lqL, img_lqR, img_gt, img_c = paired_random_crop_DP(img_lqL, img_lqR, img_gt, img_c, scale)
@@ -69,8 +70,6 @@ class Dataset_DefocusDeblur_DualPixel_16bit(data.Dataset):
             # flip, rotation
             if self.geometric_augs:
                 img_lqL, img_lqR, img_gt, img_c = random_augmentation(img_lqL, img_lqR, img_gt, img_c)
-        else:
-            img_lqL, img_lqR, img_gt, img_c = imgs_np
 
         # BGR to RGB, HWC to CHW, numpy to tensor
         img_lqL, img_lqR, img_gt, img_c = img2tensor([img_lqL, img_lqR, img_gt, img_c], bgr2rgb=True, float32=True)
@@ -86,10 +85,9 @@ class Dataset_DefocusDeblur_DualPixel_16bit(data.Dataset):
         # img_lqL = resize(img_lqL)
         # img_lqR = resize(img_lqR)
         # img_gt = resize(img_gt)
-        try:
-            img_lq = torch.cat([img_lqR, img_lqL], 0)
-        except:
-            a = 1
+
+        img_lq = torch.cat([img_lqR, img_lqL], 0)
+
         # self.cache_data[index] = {
         #     'lq': img_lq,
         #     # 'lq': img_lqR,

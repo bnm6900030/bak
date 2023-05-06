@@ -324,13 +324,13 @@ class MYIR(nn.Module):
         x = x.permute(0, 3, 1, 2)  # b c h w
         return x
 
-    def forward(self, x):
+    def forward(self, x, C):
         single = torch.clone(x[:, -3:, :, :])
         x = self.patch_embed(x)
         f_x = self.forward_features(x)
         res = self.conv_after_body(f_x) + x.permute(0, 3, 1, 2)
         x = self.conv_last(res) + single
-        return x
+        return x, None
 
 
 

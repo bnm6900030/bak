@@ -105,9 +105,9 @@ class MYModel(BaseModel):
         loss_dict = OrderedDict()
 
         # dme loss
-        l_dme = self.cri_pix(R_wraped_by_dme, F.interpolate(self.lq[:, 3:, :, :], scale_factor=1 / 4, mode='area'))
-        l_total += l_dme
-        loss_dict['l_dme'] = l_dme
+        # l_dme = self.cri_pix(R_wraped_by_dme, F.interpolate(self.lq[:, 3:, :, :], scale_factor=1 / 8, mode='area'))
+        # l_total += l_dme
+        # loss_dict['l_dme'] = l_dme
         # pixel loss
         if self.cri_pix:
             # l_pix = self.cri_pix(self.output, self.lq[:,-3:,:,:])
@@ -125,7 +125,7 @@ class MYModel(BaseModel):
                 loss_dict['l_style'] = l_style
 
         l_total.backward()
-        torch.nn.utils.clip_grad_norm_(self.net_g.parameters(), 0.5)
+        # torch.nn.utils.clip_grad_norm_(self.net_g.parameters(), 0.5)
 
         self.optimizer_g.step()
 

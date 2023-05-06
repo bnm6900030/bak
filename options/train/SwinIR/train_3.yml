@@ -14,7 +14,7 @@ datasets:
 #    dataroot_gt: /home/lab/code1/MYIR/datasets/DPDD1/val
 #    dataroot_lqL: /home/lab/code1/MYIR/datasets/DPDD1/train/L
 #    dataroot_lqR: /home/lab/code1/MYIR/datasets/DPDD1/train/R
-#    dataroot_lqC: /home/lab/code1/MYIR/datasets/DPDD1/train/R
+#    dataroot_lqC: /home/lab/code1/MYIR/datasets/DPDD1/train/C
     dataroot_gt: /home/lab/code1/Restomer/Defocus_Deblurring/Datasets/train/DPDD/target_crops
     dataroot_lqL: /home/lab/code1/Restomer/Defocus_Deblurring/Datasets/train/DPDD/inputL_crops
     dataroot_lqR: /home/lab/code1/Restomer/Defocus_Deblurring/Datasets/train/DPDD/inputR_crops
@@ -28,7 +28,7 @@ datasets:
     # data loader
     use_shuffle: true
     num_worker_per_gpu: 1
-    batch_size_per_gpu: 1
+    batch_size_per_gpu: 8
     dataset_enlarge_ratio: 1
     prefetch_mode: ~
     ### -------------Progressive training--------------------------
@@ -37,7 +37,7 @@ datasets:
     iters: [ 92000,64000,48000,36000,36000,24000 ]
     gt_size: 256   # Max patch size for progressive training
     gt_sizes: [128,160,192,256,320,384]  # Patch sizes for progressive training.
-#    gt_sizes: [160,384,384,384,384,384]  # Patch sizes for progressive training.
+#    gt_sizes: [256,256,256,256,256,256]  # Patch sizes for progressive training.
     ### ------------------------------------------------------------
 
   val:
@@ -46,7 +46,7 @@ datasets:
 #    dataroot_gt: /home/lab/code1/MYIR/datasets/DPDD1/val
 #    dataroot_lqL: /home/lab/code1/MYIR/datasets/DPDD1/train/L
 #    dataroot_lqR: /home/lab/code1/MYIR/datasets/DPDD1/train/R
-#    dataroot_lqC: /home/lab/code1/MYIR/datasets/DPDD1/train/R
+#    dataroot_lqC: /home/lab/code1/MYIR/datasets/DPDD1/train/C
     dataroot_gt: /home/lab/code1/Restomer/Defocus_Deblurring/Datasets/val/DPDD/target_crops
     dataroot_lqL: /home/lab/code1/Restomer/Defocus_Deblurring/Datasets/val/DPDD/inputL_crops
     dataroot_lqR: /home/lab/code1/Restomer/Defocus_Deblurring/Datasets/val/DPDD/inputR_crops
@@ -57,24 +57,28 @@ datasets:
 # network structures
 network_g:
   type: MYIR3
-  in_chans: 3
-  embed_dim: 252
-  num_heads: [3, 6, 12, 18 ]
-  depths: [2, 2, 6, 2 ]
-  dilations: [
-  [1, 8],
-  [1, 4],
-  [1, 2, 1, 2, 1, 2],
-  [1, 1],
-  ]
-  mlp_ratio: 2
+#  in_chans: 6
+#  embed_dim: 48
+#  num_heads: [1, 2, 4, 8, 4, 2, 1, 1]
+#  depths: [4, 6, 6, 8, 6, 6, 4, 4]
+#  dilations: [
+#      [1, 1, 1, 1],
+#      [1, 2, 1, 2, 1, 2],
+#      [1, 2, 1, 2, 1, 2],
+#      [1, 2, 1, 2, 1, 2, 1, 2],
+#      [1, 2, 1, 2, 1, 2],
+#      [1, 2, 1, 2, 1, 2],
+#      [1, 1, 1, 1],
+#      [1, 1, 1, 1],
+#  ]
+#  mlp_ratio: 2
 
 # path
 path:
   pretrain_network_g: ~
   strict_load_g: true
-  resume_state: /home/lab/code1/IR/experiments/train_MYIR_scratch/training_states/200.state
-#  resume_state: ~
+#  resume_state: /home/lab/code1/IR/experiments/train_MYIR_scratch/training_states/8000.state
+  resume_state: ~
 
 # training settings
 train:

@@ -89,6 +89,11 @@ def load_resume_state(opt):
         device_id = torch.cuda.current_device()
         resume_state = torch.load(resume_state_path, map_location=lambda storage, loc: storage.cuda(device_id))
         check_resume(opt, resume_state['iter'])
+        resume_state['schedulers'][0]['periods'] = opt['train']['scheduler']['periods']
+        resume_state['schedulers'][0]['cumulative_period'] = opt['cumulative_period']
+        resume_state['schedulers'][0]['eta_mins'] = opt['train']['scheduler']['eta_mins']
+        resume_state['optimizers'][0]['param_groups'][0]['initial_lr'] = opt['train']['optim_g']['lr']
+        resume_state['optimizers'][0]['param_groups'][0]['lr'] = opt['train']['optim_g']['lr']
     return resume_state
 
 

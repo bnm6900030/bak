@@ -230,7 +230,7 @@ class PatchEmbed(nn.Module):
 
 
 @ARCH_REGISTRY.register()
-class MYIR(nn.Module):
+class MYIR4(nn.Module):
     def __init__(
             self,
             in_chans=6,
@@ -294,8 +294,8 @@ class MYIR(nn.Module):
                 norm_layer=norm_layer,
                 downsample=PatchMerging,
             )
-            # if i_layer == 2:
-                # layer = checkpoint_wrapper(layer)
+            if i_layer == 2:
+                layer = checkpoint_wrapper(layer)
             self.layers.append(layer)
 
         self.norm = nn.LayerNorm(embed_dim, eps=1e-6)
@@ -349,7 +349,7 @@ if __name__ == '__main__':
     #                  [1, 1],
     #              ]
     #              )
-    model = MYIR(num_heads=[3, 6, 12, 24],
+    model = MYIR4(num_heads=[3, 6, 12, 24],
                  embed_dim=48,
                  depths=[2, 2, 6, 2 ],
                  is_conv_list=[False, False,False,False, ],
@@ -359,9 +359,6 @@ if __name__ == '__main__':
     import os
     os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
     os.environ["CUDA_VISIBLE_DEVICES"] = '0'
-    # from thop import profile
     summary(model, [(6, 256,256),(3, 256,256)])
-    # flops, params = profile(model, inputs=(torch.randn(1,6,256,256).cuda(),))
-    # print('FLOPs = ' + str(flops / 1000 ** 3) + 'G')
-    # print('Params = ' + str(params / 1000 ** 2) + 'M')
+
 

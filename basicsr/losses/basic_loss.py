@@ -51,6 +51,25 @@ class L1Loss(nn.Module):
         """
         return self.loss_weight * l1_loss(pred, target, weight, reduction=self.reduction)
 
+@LOSS_REGISTRY.register()
+class PSNRLoss(nn.Module):
+    """L1 (mean absolute error, MAE) loss.
+
+    Args:
+        loss_weight (float): Loss weight for L1 loss. Default: 1.0.
+        reduction (str): Specifies the reduction to apply to the output.
+            Supported choices are 'none' | 'mean' | 'sum'. Default: 'mean'.
+    """
+
+    def __init__(self, loss_weight=1.0, reduction='mean'):
+        super(PSNRLoss, self).__init__()
+
+        self.loss_weight = loss_weight
+        self.reduction = reduction
+
+    def forward(self, pred, target, weight=None, **kwargs):
+        return torch.mean((pred - target) ** 2+1e-12)
+
 
 @LOSS_REGISTRY.register()
 class MSELoss(nn.Module):

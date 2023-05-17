@@ -125,8 +125,8 @@ class MYModel(BaseModel):
                 loss_dict['l_style'] = l_style
 
         l_total.backward()
-        # torch.nn.utils.clip_grad_norm_(self.net_g.parameters(), 0.5)
 
+        # torch.nn.utils.clip_grad_norm_(self.net_g.parameters(), 0.01)
         self.optimizer_g.step()
 
         self.log_dict = self.reduce_loss_dict(loss_dict)

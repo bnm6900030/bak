@@ -14,7 +14,10 @@ from glob import glob
 
 import lpips
 
-# from basicsr.archs.my_arch import MYIR
+# from basicsr.archs.my3_arch import MYIR3
+from basicsr.archs.my3_arch import MYIR3Local as MYIR3
+
+# from basicsr.archs.my3_arch import MYIR3
 
 # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
@@ -64,7 +67,7 @@ parser.add_argument('--result_dir',
                     default='/root/autodl-tmp/pycharm_project_983/results/Dual_Pixel_Defocus_Deblurring/', type=str,
                     help='Directory for results')
 parser.add_argument('--weights',
-                    default='/home/lab/code1/IR/experiments/train_MYIR_scratch/models/net_g_8000.pth', type=str,
+                    default='/home/lab/code1/IR/experiments/train_MYIR_scratch/models/net_g_488000.pth', type=str,
                     # default='/data/code/IFAN/ckpt/IFAN_dual.pytorch', type=str,
                     # default='/root/autodl-tmp/pycharm_project_983/experiments/train_MYIR_scratch/models/net_g_144000.pth', type=str,
                     help='Path to weights')
@@ -88,10 +91,10 @@ x = yaml.load(open(yaml_file, mode='r'), Loader=Loader)
 s = x['network_g'].pop('type')
 ##########################
 device = torch.device("cuda")
-# model_restoration = MYIR(**x['network_g'])
+# model_restoration = MYIR3(**x['network_g'])
 device_id = torch.cuda.current_device()
 
-checkpoint = torch.load(args.weights, map_location=lambda storage, loc: storage.cuda(device_id))
+# checkpoint = torch.load(args.weights, map_location=lambda storage, loc: storage.cuda(device_id))
 
 # a = {}
 # for key, v in checkpoint.items():
@@ -155,14 +158,15 @@ with torch.no_grad():
         imgL = np.float32(load_img16(fileL)) / 65535.
         imgR = np.float32(load_img16(fileR)) / 65535.
         imgC = np.float32(load_img16(fileC)) / 65535.
-        # imgCC = imgC
         imgCC = np.float32(load_img16('/data/junyonglee/defocus_deblur/DPDD/test_c/source/' + fileC[-12:])) / 65535.
         # imgCC = np.float32(load_img16('/root/autodl-tmp/test/inputC' + fileC[-12:])) / 65535.
         patchCC = torch.from_numpy(imgCC).unsqueeze(0).permute(0, 3, 1, 2).to('cuda')
-        patchC = torch.from_numpy(imgC).unsqueeze(0).permute(0, 3, 1, 2).to('cuda')
+        # patchC = torch.from_numpy(imgC).unsqueeze(0).permute(0, 3, 1, 2)
         patchL = torch.from_numpy(imgL).unsqueeze(0).permute(0, 3, 1, 2)
         patchR = torch.from_numpy(imgR).unsqueeze(0).permute(0, 3, 1, 2)
         input_ = torch.cat([patchR, patchL], 1)
+        del patchR
+        del patchL
 
         # imgL = refine_image(read_frame(fileL, 255, None), 8)
         # imgR = refine_image(read_frame(fileR, 255, None), 8)
@@ -195,8 +199,8 @@ with torch.no_grad():
 
         # caculate
         psnr.append(PSNR(imgC, restored))
-        print(PSNR(imgC, restored))
-        print(PSNR(restored, imgC))
+        # print(PSNR(imgC, restored))
+        # print(PSNR(restored, imgC))
         mae.append(MAE(imgC, restored))
         ssim.append(SSIM(imgC, restored))
 

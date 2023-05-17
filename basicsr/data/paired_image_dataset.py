@@ -74,16 +74,11 @@ class Dataset_DefocusDeblur_DualPixel_16bit(data.Dataset):
         # BGR to RGB, HWC to CHW, numpy to tensor
         img_lqL, img_lqR, img_gt, img_c = img2tensor([img_lqL, img_lqR, img_gt, img_c], bgr2rgb=True, float32=True)
 
-        # normalize
-        if self.mean is not None or self.std is not None:
-            normalize(img_lqL, self.mean, self.std, inplace=True)
-            normalize(img_lqR, self.mean, self.std, inplace=True)
-            normalize(img_gt, self.mean, self.std, inplace=True)
-            normalize(img_c, self.mean, self.std, inplace=True)
 
-        # resize = transforms.Resize([128, 128], antialias=True)
+        # resize = transforms.Resize([128, 128], antialias=False)
         # img_lqL = resize(img_lqL)
         # img_lqR = resize(img_lqR)
+        # img_c = resize(img_c)
         # img_gt = resize(img_gt)
 
         img_lq = torch.cat([img_lqR, img_lqL], 0)

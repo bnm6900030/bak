@@ -37,12 +37,12 @@ datasets:
     dataset_enlarge_ratio: 1
     prefetch_mode: ~
     ### -------------Progressive training--------------------------
-    mini_batch_sizes: [ 4,4,4,4,4,6 ]               # Batch size per gpu
+    mini_batch_sizes: [ 8,8,8,8,1,1 ]             # Batch size per gpu
 #    mini_batch_sizes: [ 1,1,1,1,1,1 ]             # Batch size per gpu
     iters: [ 92000,64000,48000,36000,36000,24000 ]
 #    iters: [ 32000,32000,24000,18000,36000,24000 ]
     gt_size: 256   # Max patch size for progressive training
-    gt_sizes: [256,256,256,256,256,256]  # Patch sizes for progressive training.
+    gt_sizes: [128, 160, 192, 256, 256, 256]  # Patch sizes for progressive training.
 #    gt_sizes: [256,256,256,256,256,256]  # Patch sizes for progressive training.
     ### ------------------------------------------------------------
 
@@ -66,27 +66,19 @@ datasets:
 
 # network structures
 network_g:
-#  type: GRL
-  type: MYIR4
+  type: Eff
   upscale: 1
   in_chans: 6
   embed_dim: 48
-  num_heads: [2, 6, 12, 24 ]
-  depths: [2, 2, 6, 2 ]
-  is_conv_list: [false,false,false,false]
-  dilations: [
-  [1, 8],
-  [1, 4],
-  [1, 2, 1, 2, 1, 2],
-  [1, 1],
-  ]
+  num_heads: [2, 6, 12, 24,]
+  depths: [2, 2, 6, 2]
   mlp_ratio: 2
 
 # path
 path:
   pretrain_network_g: ~
   strict_load_g: true
-#  resume_state: /home/lab/code1/IR/experiments/train_MYIR_scratch/training_states/156000.state
+#  resume_state: /home/lab/code1/IR/experiments/train_MYIR_scratch/training_states/80000.state
   resume_state: ~
 
 # training settings

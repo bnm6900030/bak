@@ -3,6 +3,7 @@ import torch.nn as nn
 
 from natten import NeighborhoodAttention2D as NeighborhoodAttention
 import torch.nn.functional as F
+from natten.functional import natten2dqkrpb, natten2dav
 from timm.models.layers import trunc_normal_, DropPath
 import torch
 
@@ -79,6 +80,154 @@ class FeedForward(nn.Module):
         return x
 
 
+class SGForward(nn.Module):
+    def __init__(self, dim, ffn_expansion_factor):
+        super(SGForward, self).__init__()
+
+        ffn_channel = dim * ffn_expansion_factor
+        self.conv4 = nn.Conv2d(in_channels=dim, out_channels=ffn_channel, kernel_size=1, padding=0, stride=1, groups=1,
+                               bias=True)
+        self.conv5 = nn.Conv2d(in_channels=ffn_channel // 2, out_channels=dim, kernel_size=1, padding=0, stride=1,
+                               groups=1, bias=True)
+        self.beta = nn.Parameter(torch.zeros((1, dim, 1, 1)), requires_grad=True)
+
+    def forward(self, x):
+        x = x.permute(0, 3, 1, 2)  # bhwc 2 bchw
+
+        x = self.conv4(x)
+        x1, x2 = x.chunk(2, dim=1)
+        x = x1 * x2
+        x = self.conv5(x) * self.beta
+
+        x = x.permute(0, 2, 3, 1)  # bchw 2 bhwc
+        return x
+
+
+class NAttention(nn.Module):
+    """
+    Neighborhood Attention 2D Module
+    """
+
+    def __init__(
+            self,
+            dim,
+            num_heads,
+            kernel_size,
+            dilation=1,
+            bias=True,
+            qk_scale=None,
+            attn_drop=0.0,
+    ):
+        super().__init__()
+        self.num_heads = num_heads
+        self.head_dim = dim // self.num_heads // 2
+        self.scale = qk_scale or self.head_dim ** -0.5
+        assert (
+                kernel_size > 1 and kernel_size % 2 == 1
+        ), f"Kernel size must be an odd number greater than 1, got {kernel_size}."
+        self.kernel_size = kernel_size
+        assert (
+                dilation is None or dilation >= 1
+        ), f"Dilation must be greater than or equal to 1, got {dilation}."
+        self.dilation = dilation or 1
+
+        if bias:
+            self.rpb = nn.Parameter(
+                torch.zeros(num_heads, (2 * kernel_size - 1), (2 * kernel_size - 1))
+            )
+            trunc_normal_(self.rpb, std=0.02, mean=0.0, a=-2.0, b=2.0)
+        else:
+            self.register_parameter("rpb", None)
+        self.attn_drop = nn.Dropout(attn_drop)
+
+    def forward(self, x):
+        B, H, W, C = x.shape
+        qkv = (x.reshape(B, H, W, 3, self.num_heads, self.head_dim)
+               .permute(3, 0, 4, 1, 2, 5)
+               )
+        q, k, v = qkv[0], qkv[1], qkv[2]
+        q = q * self.scale
+        attn = natten2dqkrpb(q, k, self.rpb, self.kernel_size, self.dilation)
+        attn = attn.softmax(dim=-1)
+        attn = self.attn_drop(attn)
+        x = natten2dav(attn, v, self.kernel_size, self.dilation)
+        x = x.permute(0, 2, 3, 1, 4).reshape(B, H, W, C // 3)
+        return x
+
+    def extra_repr(self) -> str:
+        return (
+                f"head_dim={self.head_dim}, num_heads={self.num_heads}, "
+                + f"kernel_size={self.kernel_size}, dilation={self.dilation}, "
+                + f"rel_pos_bias={self.rpb is not None}"
+        )
+
+
+class Attention(nn.Module):
+
+    def __init__(
+            self, dim, num_heads=8, attn_drop=0.):
+        super().__init__()
+        self.num_heads = num_heads
+        self.head_dim = dim // num_heads // 2
+        # self.scale = nn.Parameter(torch.ones(num_heads, 1, 1))
+        self.attn_drop = nn.Dropout(attn_drop)
+
+    def forward(self, x):
+        B, H, W, C = x.shape
+
+        qkv = x.reshape(B, H*W, 3, self.num_heads, self.head_dim).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv.unbind(0)   # make torchscript happy (cannot use tensor as tuple)
+        x = F.scaled_dot_product_attention(q, k, v).transpose(1, 2).reshape(B, H, W, C // 3)
+
+        return x
+
+
+class MixedAttention(nn.Module):
+    def __init__(
+            self,
+            dim,
+            kernel_size,
+            dilation,
+            qkv_bias,
+            num_heads,
+            qk_scale,
+            attn_drop,
+            proj_drop,
+    ):
+        super(MixedAttention, self).__init__()
+        self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
+
+        self.dim = dim
+        self.na_attn = NAttention(
+            dim,
+            kernel_size=kernel_size,
+            dilation=dilation,
+            num_heads=num_heads,
+            qk_scale=qk_scale,
+            attn_drop=attn_drop,
+        )
+        self.self_attn = Attention(dim, num_heads, attn_drop)
+        self.proj = nn.Linear(dim, dim)
+        self.proj_drop = nn.Dropout(proj_drop)
+
+    def forward(self, x):
+        B, H, W, C = x.shape
+
+        # qkv projection
+        qkv = self.qkv(x)
+        qkv_na, qkv_self = torch.split(qkv, C * 3 // 2, dim=-1)
+
+        # attention
+        x_na = self.na_attn(qkv_na)
+        x_self = self.self_attn(qkv_self)
+        x = torch.cat([x_na, x_self], dim=-1)
+
+        # output projection
+        x = self.proj(x)
+        x = self.proj_drop(x)
+        return x
+
+
 class NATransformerLayer(nn.Module):
     def __init__(
             self,
@@ -112,17 +261,24 @@ class NATransformerLayer(nn.Module):
             attn_drop=attn_drop,
             proj_drop=drop,
         )
-
+        # self.attn = MixedAttention(
+        #     dim,
+        #     kernel_size=kernel_size,
+        #     dilation=dilation,
+        #     num_heads=num_heads,
+        #     qkv_bias=qkv_bias,
+        #     qk_scale=qk_scale,
+        #     attn_drop=attn_drop,
+        #     proj_drop=drop,
+        # )
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
         self.norm2 = norm_layer(dim, eps=1e-6)
-        self.mlp = FeedForward(dim, 2.66, False)
-
+        # self.mlp = FeedForward(dim, 2.66, False)
+        self.mlp = SGForward(dim, 2)
 
     def forward(self, x):
         shortcut = x
-        x = self.norm1(x)
-        x = self.attn(x)
-        x = shortcut + self.drop_path(x)
+        x = shortcut + self.drop_path(self.attn(self.norm1(x)))
         x = x + self.drop_path(self.mlp(self.norm2(x)))
         return x
 
@@ -179,7 +335,7 @@ class BasicLayer(nn.Module):
             # build blocks
             self.blocks = nn.ModuleList(
                 [
-                    NATransformerLayer(
+                    checkpoint_wrapper(NATransformerLayer(
                         dim=dim,
                         num_heads=num_heads,
                         kernel_size=kernel_size,
@@ -191,7 +347,7 @@ class BasicLayer(nn.Module):
                         attn_drop=attn_drop,
                         drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path,
                         norm_layer=norm_layer,
-                    )
+                    ))
                     for i in range(depth)
                 ]
             )
@@ -294,8 +450,8 @@ class MYIR4(nn.Module):
                 norm_layer=norm_layer,
                 downsample=PatchMerging,
             )
-            if i_layer == 2:
-                layer = checkpoint_wrapper(layer)
+            # if i_layer % 2 == 0:
+            # layer = checkpoint_wrapper(layer)
             self.layers.append(layer)
 
         self.norm = nn.LayerNorm(embed_dim, eps=1e-6)
@@ -336,7 +492,6 @@ class MYIR4(nn.Module):
         return x, None
 
 
-
 if __name__ == '__main__':
     # model = MYIR(num_heads=[3, 6, 12, 24],
     #              embed_dim=96,
@@ -349,16 +504,15 @@ if __name__ == '__main__':
     #                  [1, 1],
     #              ]
     #              )
-    model = MYIR4(num_heads=[3, 6, 12, 24],
-                 embed_dim=48,
-                 depths=[2, 2, 6, 2 ],
-                 is_conv_list=[False, False,False,False, ],
-                 )
+    model = MYIR4(num_heads=[2, 6, 12, 24],
+                  embed_dim=48,
+                  depths=[2, 2, 6, 2],
+                  is_conv_list=[False, False, False, False, ],
+                  )
     model.cuda()
     from torchsummary import summary
     import os
+
     os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
     os.environ["CUDA_VISIBLE_DEVICES"] = '0'
-    summary(model, [(6, 256,256),(3, 256,256)])
-
-
+    summary(model, [(6, 256, 256), (3, 256, 256)])

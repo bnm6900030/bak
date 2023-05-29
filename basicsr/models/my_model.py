@@ -99,19 +99,19 @@ class MYModel(BaseModel):
     def optimize_parameters(self, current_iter):
         self.optimizer_g.zero_grad()
 
-        self.output, R_wraped_by_dme = self.net_g(self.lq, self.c)
+        self.output, _ = self.net_g(self.lq, self.c)
+        # self.output1, _ = self.net_g(self.lq, self.c)
 
         l_total = 0
         loss_dict = OrderedDict()
 
-        # dme loss
-        # l_dme = self.cri_pix(R_wraped_by_dme, F.interpolate(self.lq[:, 3:, :, :], scale_factor=1 / 8, mode='area'))
-        # l_total += l_dme
-        # loss_dict['l_dme'] = l_dme
         # pixel loss
         if self.cri_pix:
             # l_pix = self.cri_pix(self.output, self.lq[:,-3:,:,:])
             l_pix = self.cri_pix(self.output, self.gt)
+            # l_pix2 = self.cri_pix(self.output1, self.gt) *0.5
+            # kl_loss = self.compute_kl_loss(self.output, self.output1)
+            # l_total += l_pix + 0.1+kl_loss + l_pix2
             l_total += l_pix
             loss_dict['l_pix'] = l_pix
         # perceptual loss
@@ -298,3 +298,20 @@ class MYModel(BaseModel):
         else:
             self.save_network(self.net_g, 'net_g', current_iter)
         self.save_training_state(epoch, current_iter)
+
+    def compute_kl_loss(self, p, q, pad_mask = None):
+
+        p_loss = F.kl_div(F.log_softmax(p, dim=-1), F.softmax(q, dim=-1), reduction='none')
+        q_loss = F.kl_div(F.log_softmax(q, dim=-1), F.softmax(p, dim=-1), reduction='none')
+
+        # pad_mask is for seq-level tasks
+        if pad_mask is not None:
+            p_loss.masked_fill_(pad_mask, 0.)
+            q_loss.masked_fill_(pad_mask, 0.)
+
+        # You can choose whether to use function "sum" and "mean" depending on your task
+        p_loss = p_loss.sum()
+        q_loss = q_loss.sum()
+
+        loss = (p_loss + q_loss) / 2
+        return loss

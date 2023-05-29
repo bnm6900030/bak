@@ -14,10 +14,8 @@ from glob import glob
 
 import lpips
 
-# from basicsr.archs.my3_arch import MYIR3
-from basicsr.archs.my3_arch import MYIR3Local as MYIR3
+from basicsr.archs.grl_arch import GRL
 
-# from basicsr.archs.my3_arch import MYIR3
 
 # os.environ['CUDA_LAUNCH_BLOCKING'] = '1'
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "max_split_size_mb:128"
@@ -67,7 +65,7 @@ parser.add_argument('--result_dir',
                     default='/root/autodl-tmp/pycharm_project_983/results/Dual_Pixel_Defocus_Deblurring/', type=str,
                     help='Directory for results')
 parser.add_argument('--weights',
-                    default='/home/lab/code1/IR/experiments/train_MYIR_scratch/models/net_g_488000.pth', type=str,
+                    default='/home/lab/code1/IR/experiments/train_MYIR_scratch/models/net_g_204000.pth', type=str,
                     # default='/data/code/IFAN/ckpt/IFAN_dual.pytorch', type=str,
                     # default='/root/autodl-tmp/pycharm_project_983/experiments/train_MYIR_scratch/models/net_g_144000.pth', type=str,
                     help='Path to weights')
@@ -91,22 +89,21 @@ x = yaml.load(open(yaml_file, mode='r'), Loader=Loader)
 s = x['network_g'].pop('type')
 ##########################
 device = torch.device("cuda")
-# model_restoration = MYIR3(**x['network_g'])
+model_restoration = GRL(**x['network_g'])
 device_id = torch.cuda.current_device()
 
-# checkpoint = torch.load(args.weights, map_location=lambda storage, loc: storage.cuda(device_id))
+checkpoint = torch.load(args.weights, map_location=lambda storage, loc: storage.cuda(device_id))
 
 # a = {}
 # for key, v in checkpoint.items():
 #     if not key[15:].startswith('t.RBF'):
 #         a[key[15:]] = v
-# model_restoration.load_state_dict(checkpoint['params'])
+model_restoration.load_state_dict(checkpoint['params'])
 # model_restoration.load_state_dict(a)
 
 print("===>Testing using weights: ", args.weights)
-# model_restoration.cuda()
 # model_restoration = nn.DataParallel(model_restoration)
-# model_restoration.eval()
+model_restoration.eval()
 
 result_dir = args.result_dir
 if args.save_images:
@@ -160,13 +157,13 @@ with torch.no_grad():
         imgC = np.float32(load_img16(fileC)) / 65535.
         imgCC = np.float32(load_img16('/data/junyonglee/defocus_deblur/DPDD/test_c/source/' + fileC[-12:])) / 65535.
         # imgCC = np.float32(load_img16('/root/autodl-tmp/test/inputC' + fileC[-12:])) / 65535.
-        patchCC = torch.from_numpy(imgCC).unsqueeze(0).permute(0, 3, 1, 2).to('cuda')
-        # patchC = torch.from_numpy(imgC).unsqueeze(0).permute(0, 3, 1, 2)
+        patchCC = torch.from_numpy(imgCC).unsqueeze(0).permute(0, 3, 1, 2)
+        patchC = torch.from_numpy(imgC).unsqueeze(0).permute(0, 3, 1, 2)
         patchL = torch.from_numpy(imgL).unsqueeze(0).permute(0, 3, 1, 2)
         patchR = torch.from_numpy(imgR).unsqueeze(0).permute(0, 3, 1, 2)
         input_ = torch.cat([patchR, patchL], 1)
-        del patchR
-        del patchL
+        # del patchR
+        # del patchL
 
         # imgL = refine_image(read_frame(fileL, 255, None), 8)
         # imgR = refine_image(read_frame(fileR, 255, None), 8)
@@ -178,31 +175,33 @@ with torch.no_grad():
         # patchCC = torch.FloatTensor(imgCC.transpose(0, 3, 1, 2).copy()).to('cuda')
         # input_ = torch.cat([patchR, patchL], 1)
 
-        restored = patchCC
+        # restored = patchCC
 
         #  if split
         # input_1 = torch.clone(input_[:, :, :, :input_.shape[3] // 2])
         # input_2 = torch.clone(input_[:, :, :, input_.shape[3] // 2:])
         # input_1C = torch.clone(patchCC[:, :, :, :input_.shape[3] // 2])
         # input_2C = torch.clone(patchCC[:, :, :, input_.shape[3] // 2:])
-        # input_1,_ = model_restoration(input_1.cuda(0), input_1C)
-        # input_2,_ = model_restoration(input_2.cuda(0), input_2C)
+        # input_1,_ = model_restoration(input_1.cuda(0), None)
+        # input_2,_ = model_restoration(input_2.cuda(0), None)
         # restored = torch.cat([input_1, input_2], 3)
 
         # else:
-        # restored, _ = model_restoration(input_.cuda(0), patchCC.cuda(0))
+        model_restoration = model_restoration.cpu()
+        restored, _ = model_restoration(input_.cpu(), None)
 
         #
         restored = torch.clamp(restored, 0, 1)
         restored = restored.cpu().detach().permute(0, 2, 3, 1).squeeze(0).numpy()
-
 
         # caculate
         psnr.append(PSNR(imgC, restored))
         # print(PSNR(imgC, restored))
         # print(PSNR(restored, imgC))
         mae.append(MAE(imgC, restored))
+        # mae.append(MAE(patchC.cpu().detach().permute(0, 2, 3, 1).squeeze(0).numpy(), restored))
         ssim.append(SSIM(imgC, restored))
+        # ssim.append(SSIM(patchC.cpu().detach().permute(0, 2, 3, 1).squeeze(0).numpy(), restored))
 
         # gt = patchC.cpu().numpy()[0].transpose(1, 2, 0)
         # psnr.append(PSNR(gt, restored))

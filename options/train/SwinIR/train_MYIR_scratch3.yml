@@ -29,10 +29,10 @@ datasets:
     dataset_enlarge_ratio: 1
     prefetch_mode: ~
     ### -------------Progressive training--------------------------
-    mini_batch_sizes: [ 8,5,4,2,1,1 ]             # Batch size per gpu
-    iters: [ 92000,64000,48000,36000,36000,24000 ]
+    mini_batch_sizes: [ 8,8,8,8,1,1 ]             # Batch size per gpu
+    iters: [160000, 22000, 48000, 36000, 36000, 24000]
     gt_size: 256   # Max patch size for progressive training
-    gt_sizes: [128,160,192,256,256,256]  # Patch sizes for progressive training.
+    gt_sizes: [128, 160, 192, 256, 256, 256]  # Patch sizes for progressive training.
 #    gt_sizes: [160,384,384,384,384,384]  # Patch sizes for progressive training.
     ### ------------------------------------------------------------
 
@@ -51,7 +51,7 @@ network_g:
   type: MYIR
 #  upscale: 1
   in_chans: 6
-  embed_dim: 72
+  embed_dim: 48
   num_heads: [3, 6, 12, 24 ]
   depths: [2, 2, 6, 2 ]
   is_conv_list: [false,false,false,false]
@@ -67,7 +67,7 @@ network_g:
 path:
   pretrain_network_g: ~
   strict_load_g: true
-  resume_state: /root/autodl-tmp/pycharm_project_983/experiments/train_MYIR_scratch/training_states/96000.state
+  resume_state: /root/autodl-tmp/pycharm_project_983/experiments/train_MYIR_scratch/training_states/184000.state
 #  resume_state: ~
 
 # training settings
@@ -86,7 +86,7 @@ train:
     type: CosineAnnealingRestartCyclicLR
     periods: [96000, 408000 ]
     restart_weights: [ 1,1 ]
-    eta_mins: [0.0003,0.000001 ]
+    eta_mins: [0.0003,0.0003 ]
 
   # losses
   pixel_opt:

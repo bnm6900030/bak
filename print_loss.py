@@ -24,8 +24,8 @@ loss_nums = []
 
 val_iters = []
 val_nums = []
-# log_path = os.listdir('/home/lab/code1/IR/experiments/train_MYIR_scratch/')
-log_path = os.listdir('/root/autodl-tmp/pycharm_project_983/experiments/train_MYIR_scratch/')
+log_path = os.listdir('/home/lab/code1/IR/experiments/train_MYIR_scratch/')
+# log_path = os.listdir('/root/autodl-tmp/pycharm_project_983/experiments/train_MYIR_scratch/')
 log_path = list(filter(lambda x:x.__contains__('.log'), log_path))
 def get_time(name):
     return int(log_time.search(name)[0])+int(log_day.search(name)[0])*1000000
@@ -33,8 +33,8 @@ log_path.sort(key=get_time)
 
 for log_f in log_path:
     print(log_f)
-    with open('/root/autodl-tmp/pycharm_project_983/experiments/train_MYIR_scratch/'+log_f, 'r') as f:
-    # with open('/home/lab/code1/IR/experiments/train_MYIR_scratch/'+log_f, 'r') as f:
+    # with open('/root/autodl-tmp/pycharm_project_983/experiments/train_MYIR_scratch/'+log_f, 'r') as f:
+    with open('/home/lab/code1/IR/experiments/train_MYIR_scratch/'+log_f, 'r') as f:
         for line in f:
             if line.__contains__('[epoch'):
                 # print(line)

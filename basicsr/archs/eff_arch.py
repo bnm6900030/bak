@@ -1,12 +1,10 @@
-import itertools
-
 from einops import rearrange
 from fairscale.nn import checkpoint_wrapper
 import torch.nn as nn
 from timm.models.layers import trunc_normal_, DropPath
 import torch
+from natten import NeighborhoodAttention2D as NeighborhoodAttention
 
-from basicsr.archs.utils import LayerNorm
 from basicsr.utils.registry import ARCH_REGISTRY
 
 
@@ -46,76 +44,74 @@ class Mlp(nn.Module):
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
 
-
 class Attention(nn.Module):
-    def __init__(self, dim=384, num_heads=8,
-                 attn_ratio=4,
-                 resolution=7,
-                 act_layer=nn.ReLU):
-        super().__init__()
+    def __init__(self, dim, num_heads, bias, kernel_size=7):
+        super(Attention, self).__init__()
+        self.dim = dim
+        self.bias = bias
+
         self.num_heads = num_heads
-        head_dim = dim // self.num_heads
-        # self.attn_ratio = attn_ratio
-        self.scale = head_dim ** -0.5
-        # self.dh = attn_ratio * dim
+        self.temperature = nn.Parameter(torch.ones(num_heads, 1, 1))
 
-        self.resolution = resolution
-        self.N = self.resolution ** 2
-        self.q = nn.Sequential(nn.Conv2d(dim, dim, 1), )
-        self.k = nn.Sequential(nn.Conv2d(dim, dim, 1), )
-        self.v = nn.Sequential(nn.Conv2d(dim, dim, 1), )
-        self.v_local = nn.Sequential(nn.Conv2d(dim, dim,
-                                               kernel_size=3, stride=1, padding=1, groups=dim), )
-
-        self.talking_head1 = nn.Conv2d(self.num_heads, self.num_heads, kernel_size=1, stride=1, padding=0)
-        self.talking_head2 = nn.Conv2d(self.num_heads, self.num_heads, kernel_size=1, stride=1, padding=0)
-
-        self.proj = nn.Sequential(act_layer(),
-                                  nn.Conv2d(dim, dim, 1), )
+        self.qkv = nn.Conv2d(dim, dim * 3, kernel_size=1, bias=bias)
+        self.qkv_dwconv = nn.Conv2d(dim * 3, dim * 3, kernel_size=3, stride=1, padding=1, groups=dim * 3, bias=bias)
+        self.project_out = nn.Conv2d(dim, dim, kernel_size=1, bias=bias)
 
     def forward(self, x):
-        x = x.permute(0, 3, 1, 2)  # bhwc 2 bchw
+        x=x.permute(0, 3, 1, 2)  # bhwc 2 bchw
+        b, c, h, w = x.shape
 
-        B, C, H, W = x.shape
-        q = rearrange(self.q(x), 'b (head c) h w -> b head c (h w)', head=self.num_heads).contiguous(memory_format=torch.contiguous_format)
-        k = rearrange(self.k(x), 'b (head c) h w -> b head c (h w)', head=self.num_heads).contiguous(memory_format=torch.contiguous_format)
+        qkv = self.qkv_dwconv(self.qkv(x))
+        q, k, v = qkv.chunk(3, dim=1)
+
+        q = rearrange(q, 'b (head c) h w -> b head c (h w)', head=self.num_heads).contiguous(
+            memory_format=torch.contiguous_format)
+        k = rearrange(k, 'b (head c) h w -> b head c (h w)', head=self.num_heads).contiguous(
+            memory_format=torch.contiguous_format)
+        v = rearrange(v, 'b (head c) h w -> b head c (h w)', head=self.num_heads).contiguous(
+            memory_format=torch.contiguous_format)
 
         q = torch.nn.functional.normalize(q, dim=-1)
         k = torch.nn.functional.normalize(k, dim=-1)
 
-        v = self.v(x)
-        v_local = self.v_local(v)
-        v = rearrange(v, 'b (head c) h w -> b head c (h w)', head=self.num_heads).contiguous(memory_format=torch.contiguous_format)
-
-
-        attn = ((q @ k.transpose(-2, -1)) * self.scale)
-        attn = self.talking_head1(attn)
+        attn = (q @ k.transpose(-2, -1)) * self.temperature
         attn = attn.softmax(dim=-1)
-        attn = self.talking_head2(attn)
 
-        x = (attn @ v)
+        out = (attn @ v)
 
-        out = rearrange(x, 'b head c (h w) -> b (head c) h w', head=self.num_heads, h=H, w=W) + v_local
+        out = rearrange(out, 'b head c (h w) -> b (head c) h w', head=self.num_heads, h=h, w=w)
 
-        out = self.proj(out)
+        out = self.project_out(out)
         out = out.permute(0, 2, 3, 1)  # bchw 2 bhwc
-        return out
 
+        return out
 
 class AttnFFN(nn.Module):
     def __init__(
             self,
             dim, mlp_ratio=2,
-            attn_ratio=4,
             act_layer=nn.GELU,
             norm_layer=nn.LayerNorm,
             drop=0.,
             drop_path=0.,
-            resolution=7,
-            num_heads=8
+            num_heads=4,
+            kernel_size=7,
+            dilation=1,
+            qkv_bias=True,
+            qk_scale=None,
+            attn_drop=0.0,
     ):
         super().__init__()
-        self.token_mixer = Attention(dim, attn_ratio=attn_ratio, resolution=resolution, num_heads=num_heads)
+        self.token_mixer = NeighborhoodAttention(
+            dim,
+            kernel_size=kernel_size,
+            dilation=dilation,
+            num_heads=num_heads,
+            qkv_bias=qkv_bias,
+            qk_scale=qk_scale,
+            attn_drop=attn_drop,
+            proj_drop=drop,
+        )
         self.norm1 = norm_layer(dim, eps=1e-6)
         self.norm2 = norm_layer(dim, eps=1e-6)
         self.mlp = Mlp(dim=dim, mlp_ratio=mlp_ratio, act_layer=act_layer, drop=drop, mid_conv=False)
@@ -127,127 +123,71 @@ class AttnFFN(nn.Module):
         return x
 
 
-class PatchMerging(nn.Module):
-    def __init__(self, dim):
-        super().__init__()
-        self.downsample_layer = nn.Sequential(
-            LayerNorm(dim, eps=1e-6, data_format="channels_first"),
-            nn.Conv2d(dim, dim, 3, 1, 1),
-        )
-
-    def forward(self, x):
-        x = x.permute(0, 3, 1, 2)  # b c h w
-        x = self.downsample_layer(x)
-        x = x.permute(0, 2, 3, 1)  # b h w c
-        return x
-
-
-class BasicLayer(nn.Module):
-    def __init__(
-            self,
-            dim,
-            depth,
-            num_heads,
-            mlp_ratio=2,
-            attn_ratio=4,
-            drop=0.0,
-            drop_path=None,
-            norm_layer=nn.LayerNorm,
-            downsample=None,
-            resolution=7,
-    ):
-
-        super().__init__()
-        if drop_path is None:
-            drop_path = []
-        self.dim = dim
-        self.depth = depth
-
-        # build blocks
-        self.blocks = nn.ModuleList(
-            [
-                AttnFFN(
-                    dim=dim,
-                    num_heads=num_heads,
-                    mlp_ratio=mlp_ratio,
-                    attn_ratio=attn_ratio,
-                    resolution=resolution,
-                    drop=drop,
-                    drop_path=drop_path[i] if isinstance(drop_path, list) else drop_path,
-                    norm_layer=norm_layer,
-                )
-                for i in range(depth)
-            ]
-        )
-        # patch merging layer
-        if downsample is not None:
-            self.downsample = downsample(dim=dim)
-        else:
-            self.downsample = None
-
-    def forward(self, x):
-        for blk in self.blocks:
-            x = blk(x)
-        if self.downsample is not None:
-            x = self.downsample(x)
-        return x
-
 
 @ARCH_REGISTRY.register()
 class Eff(nn.Module):
     def __init__(
             self,
             in_chans=6,
-            img_size=256,
             embed_dim=48,
-            depths=None,
-            num_heads=None,
             mlp_ratio=2,
-            attn_ratio=4,
-            drop_rate=0.0,
-            drop_path_rate=0.2,
-            norm_layer=nn.LayerNorm,
+            middle_blk_num=1, enc_blk_nums=[1, 1, 28], dec_blk_nums=[ 1, 1, 1],
             is_checkpoint=True,
             **kwargs
     ):
         super().__init__()
-        self.num_layers = len(depths)
         self.embed_dim = embed_dim
         self.mlp_ratio = mlp_ratio
-        self.attn_ratio = attn_ratio
 
         # split image into non-overlapping patches
         self.patch_embed = nn.Conv2d(in_chans, embed_dim, 3, 1, 1)
         # self.patch_embed = checkpoint_wrapper(self.patch_embed)
-        # stochastic depth
-        dpr = [x.item() for x in torch.linspace(0, drop_path_rate, sum(depths))]
-
         # build layers
-        self.layers = nn.ModuleList()
-        for i_layer in range(self.num_layers):
-            layer = BasicLayer(
-                dim=embed_dim,
-                depth=depths[i_layer],
-                num_heads=num_heads[i_layer],
-                mlp_ratio=self.mlp_ratio,
-                attn_ratio=self.attn_ratio,
-                drop=drop_rate,
-                drop_path=dpr[sum(depths[:i_layer]): sum(depths[: i_layer + 1])],
-                norm_layer=norm_layer,
-                downsample=PatchMerging,
-                resolution=img_size,
+        self.encoders = nn.ModuleList()
+        self.decoders = nn.ModuleList()
+        self.middle_blks = nn.ModuleList()
+        self.ups = nn.ModuleList()
+        self.downs = nn.ModuleList()
+        for num in enc_blk_nums:
+            self.encoders.append(
+                nn.Sequential(
+                    *[AttnFFN(embed_dim) for _ in range(num)]
+                )
             )
-            # if i_layer % 2 == 0:
-            layer = checkpoint_wrapper(layer)
-            self.layers.append(layer)
+            self.downs.append(
+                nn.Conv2d(embed_dim, 2*embed_dim, 2, 2)
+            )
+            embed_dim = embed_dim * 2
 
-        self.norm = nn.LayerNorm(embed_dim, eps=1e-6)
-        self.conv_after_body = nn.Conv2d(embed_dim, embed_dim, 3, 1, 1)
-        self.conv_last = nn.Conv2d(embed_dim, 3, 3, 1, 1, 1)
+        self.middle_blks = nn.Sequential(
+                *[AttnFFN(embed_dim) for _ in range(middle_blk_num)]
+            )
+        # self.middle_blks = checkpoint_wrapper(self.middle_blks)
+        for num in dec_blk_nums:
+            self.ups.append(
+                nn.Sequential(
+                    nn.Conv2d(embed_dim, embed_dim * 2, kernel_size=1, bias=False),
+                    nn.PixelShuffle(2)
+                )
+            )
+            embed_dim = embed_dim // 2
+            self.decoders.append(
+                nn.Sequential(
+                    *[AttnFFN(embed_dim) for _ in range(num)]
+                )
+            )
+
+        self.norm = nn.LayerNorm(self.embed_dim, eps=1e-6)
+        self.conv_after_body = nn.Conv2d(self.embed_dim, self.embed_dim, 3, 1, 1)
+        self.conv_last = nn.Conv2d(self.embed_dim, 3, 3, 1, 1, 1)
         self.apply(self._init_weights)
 
     def _init_weights(self, m):
-        if isinstance(m, (nn.Conv2d, nn.Linear)):
+        if isinstance(m, nn.Linear):
+            torch.nn.init.xavier_uniform_(m.weight)
+            if m.bias is not None:
+                nn.init.constant_(m.bias, 0)
+        if isinstance(m, nn.Conv2d):
             trunc_normal_(m.weight, std=.02)
             if m.bias is not None:
                 nn.init.constant_(m.bias, 0)
@@ -257,8 +197,19 @@ class Eff(nn.Module):
 
     def forward_features(self, x):
         x = x.permute(0, 2, 3, 1)  # b h w c
-        for layer in self.layers:
-            x = layer(x)
+
+        encs = []
+        for encoder, down in zip(self.encoders, self.downs):
+            x = encoder(x)
+            encs.append(x)
+            x = down(x.permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
+
+        x = self.middle_blks(x)
+
+        for decoder, up, enc_skip in zip(self.decoders, self.ups, encs[::-1]):
+            x = up(x.permute(0, 3, 1, 2)).permute(0, 2, 3, 1)
+            x = x + enc_skip
+            x = decoder(x)
         x = self.norm(x)
         x = x.permute(0, 3, 1, 2)  # b c h w
         return x
@@ -272,9 +223,7 @@ class Eff(nn.Module):
 
 
 if __name__ == '__main__':
-    model = Eff(num_heads=[2, 6, 8, 12,8,8],
-                embed_dim=48,
-                depths=[2, 2, 2, 2,2,2],
+    model = Eff( embed_dim=48,
                 )
     model.cuda()
     from torchsummary import summary

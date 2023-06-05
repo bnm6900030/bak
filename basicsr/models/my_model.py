@@ -126,7 +126,7 @@ class MYModel(BaseModel):
 
         l_total.backward()
 
-        # torch.nn.utils.clip_grad_norm_(self.net_g.parameters(), 0.01)
+        torch.nn.utils.clip_grad_norm_(self.net_g.parameters(), 0.02)
         self.optimizer_g.step()
 
         self.log_dict = self.reduce_loss_dict(loss_dict)

@@ -65,7 +65,7 @@ parser.add_argument('--result_dir',
                     default='/root/autodl-tmp/pycharm_project_983/results/Dual_Pixel_Defocus_Deblurring/', type=str,
                     help='Directory for results')
 parser.add_argument('--weights',
-                    default='/home/lab/code1/IR/experiments/train_MYIR_scratch/models/net_g_204000.pth', type=str,
+                    default='/home/lab/code1/IR/experiments/train_MYIR_scratch/models/net_g_8000.pth', type=str,
                     # default='/data/code/IFAN/ckpt/IFAN_dual.pytorch', type=str,
                     # default='/root/autodl-tmp/pycharm_project_983/experiments/train_MYIR_scratch/models/net_g_144000.pth', type=str,
                     help='Path to weights')
@@ -88,22 +88,22 @@ x = yaml.load(open(yaml_file, mode='r'), Loader=Loader)
 
 s = x['network_g'].pop('type')
 ##########################
-device = torch.device("cuda")
-model_restoration = GRL(**x['network_g'])
-device_id = torch.cuda.current_device()
+# device = torch.device("cuda")
+# model_restoration = GRL(**x['network_g'])
+# device_id = torch.cuda.current_device()
 
-checkpoint = torch.load(args.weights, map_location=lambda storage, loc: storage.cuda(device_id))
+# checkpoint = torch.load(args.weights, map_location=lambda storage, loc: storage.cuda(device_id))
 
 # a = {}
 # for key, v in checkpoint.items():
 #     if not key[15:].startswith('t.RBF'):
 #         a[key[15:]] = v
-model_restoration.load_state_dict(checkpoint['params'])
+# model_restoration.load_state_dict(checkpoint['params'])
 # model_restoration.load_state_dict(a)
 
 print("===>Testing using weights: ", args.weights)
 # model_restoration = nn.DataParallel(model_restoration)
-model_restoration.eval()
+# model_restoration.eval()
 
 result_dir = args.result_dir
 if args.save_images:
@@ -152,30 +152,30 @@ psnr, mae, ssim, pips = [], [], [], []
 with torch.no_grad():
     for fileL, fileR, fileC in tqdm(zip(filesL, filesR, filesC), total=len(filesC)):
 
-        imgL = np.float32(load_img16(fileL)) / 65535.
-        imgR = np.float32(load_img16(fileR)) / 65535.
-        imgC = np.float32(load_img16(fileC)) / 65535.
-        imgCC = np.float32(load_img16('/data/junyonglee/defocus_deblur/DPDD/test_c/source/' + fileC[-12:])) / 65535.
+        # imgL = np.float32(load_img16(fileL)) / 65535.
+        # imgR = np.float32(load_img16(fileR)) / 65535.
+        # imgC = np.float32(load_img16(fileC)) / 65535.
+        # imgCC = np.float32(load_img16('/data/junyonglee/defocus_deblur/DPDD/test_c/source/' + fileC[-12:])) / 65535.
         # imgCC = np.float32(load_img16('/root/autodl-tmp/test/inputC' + fileC[-12:])) / 65535.
-        patchCC = torch.from_numpy(imgCC).unsqueeze(0).permute(0, 3, 1, 2)
-        patchC = torch.from_numpy(imgC).unsqueeze(0).permute(0, 3, 1, 2)
-        patchL = torch.from_numpy(imgL).unsqueeze(0).permute(0, 3, 1, 2)
-        patchR = torch.from_numpy(imgR).unsqueeze(0).permute(0, 3, 1, 2)
-        input_ = torch.cat([patchR, patchL], 1)
+        # patchCC = torch.from_numpy(imgCC).unsqueeze(0).permute(0, 3, 1, 2)
+        # patchC = torch.from_numpy(imgC).unsqueeze(0).permute(0, 3, 1, 2)
+        # patchL = torch.from_numpy(imgL).unsqueeze(0).permute(0, 3, 1, 2)
+        # patchR = torch.from_numpy(imgR).unsqueeze(0).permute(0, 3, 1, 2)
+        # input_ = torch.cat([patchR, patchL], 1)
         # del patchR
         # del patchL
 
-        # imgL = refine_image(read_frame(fileL, 255, None), 8)
-        # imgR = refine_image(read_frame(fileR, 255, None), 8)
-        # imgC = refine_image(read_frame(fileC, 255, None), 8)
-        # imgCC = refine_image(read_frame('/data/junyonglee/defocus_deblur/DPDD/test_c/source/'+fileC[-12:], 255, None), 8)
-        # patchC = torch.FloatTensor(imgC.transpose(0, 3, 1, 2).copy()).to('cuda')
-        # patchL = torch.FloatTensor(imgL.transpose(0, 3, 1, 2).copy()).to('cuda')
-        # patchR = torch.FloatTensor(imgR.transpose(0, 3, 1, 2).copy()).to('cuda')
+        imgL = refine_image(read_frame(fileL, 255, None), 8)
+        imgR = refine_image(read_frame(fileR, 255, None), 8)
+        imgC = refine_image(read_frame(fileC, 255, None), 8)
+        imgCC = refine_image(read_frame('/data/junyonglee/defocus_deblur/DPDD/test_c/source/'+fileC[-12:], 255, None), 8)
+        patchC = torch.FloatTensor(imgC.transpose(0, 3, 1, 2).copy()).to('cuda')
+        patchL = torch.FloatTensor(imgL.transpose(0, 3, 1, 2).copy()).to('cuda')
+        patchR = torch.FloatTensor(imgR.transpose(0, 3, 1, 2).copy()).to('cuda')
         # patchCC = torch.FloatTensor(imgCC.transpose(0, 3, 1, 2).copy()).to('cuda')
         # input_ = torch.cat([patchR, patchL], 1)
 
-        # restored = patchCC
+        restored = patchCC
 
         #  if split
         # input_1 = torch.clone(input_[:, :, :, :input_.shape[3] // 2])
@@ -187,12 +187,12 @@ with torch.no_grad():
         # restored = torch.cat([input_1, input_2], 3)
 
         # else:
-        model_restoration = model_restoration.cpu()
-        restored, _ = model_restoration(input_.cpu(), None)
+        # model_restoration = model_restoration.cpu()
+        # restored, _ = model_restoration(input_.cpu(), None)
 
         #
-        restored = torch.clamp(restored, 0, 1)
-        restored = restored.cpu().detach().permute(0, 2, 3, 1).squeeze(0).numpy()
+        # restored = torch.clamp(restored, 0, 1)
+        # restored = restored.cpu().detach().permute(0, 2, 3, 1).squeeze(0).numpy()
 
         # caculate
         psnr.append(PSNR(imgC, restored))

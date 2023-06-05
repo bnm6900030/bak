@@ -54,7 +54,7 @@ class Dataset_DefocusDeblur_DualPixel_16bit(data.Dataset):
         for path, client_key in zip(img_paths, client_keys):
             img_bytes = self.file_client.get(self.paths[index][path], client_key)
             try:
-                imgs_np.append(imfrombytesDP(img_bytes, float32=True))
+                imgs_np.append(imfrombytesDP(img_bytes, float32=False))
             except:
                 raise Exception("gt path {} not working".format(path))
         img_gt, img_lqL, img_lqR, img_c = imgs_np

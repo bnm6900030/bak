@@ -139,9 +139,9 @@ def imfrombytesDP(content, float32=False):
     img_np = np.frombuffer(content, np.uint8)
     if img_np is None:
         raise Exception('None .. !!!')
-    img = cv2.imdecode(img_np, cv2.IMREAD_UNCHANGED)
-    if float32:
-        img = img.astype(np.float32) / 65535.
+    img = cv2.imdecode(img_np, cv2.IMREAD_COLOR)
+    # if float32:
+    img = img.astype(np.float32) / 255.
     return img
 
 
